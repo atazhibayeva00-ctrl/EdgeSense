@@ -1,0 +1,223 @@
+You are Replit Agent. Build a hackathon MVP called “EchoPath” (web app runnable on a phone browser) that demonstrates a LOCAL-FIRST, AGENTIC, HYBRID AI system with SMART ROUTING between:
+
+- FunctionGemma running locally via Cactus (edge)
+- Gemini via Google AI Studio (cloud)
+
+The project must be demo-ready in ~4 hours and optimized for stability. The app must run from a single Replit URL and be usable on a phone (mobile web).
+
+HIGH-LEVEL DEMO GOAL
+When I open the URL on my phone:
+1) I tap “Start Camera”
+2) I turn on “Streaming”
+3) The app streams low-rate frames to the backend
+4) The backend uses local FunctionGemma (via Cactus) to produce quick scene/hazard alerts + a confidence score
+5) A ROUTER decides local vs cloud:
+   - local for hazards/low latency/offline/high confidence
+   - cloud (Gemini) for complex questions or low confidence
+6) The phone speaks concise guidance (TTS) with spam protection
+7) There’s an obvious UI indicator explaining “Routed LOCAL vs CLOUD” and WHY (latency/complexity/connectivity/confidence)
+8) If WebSocket fails, the app can switch to HTTP polling fallback and still demo successfully
+
+IMPORTANT: This hackathon requires showing intelligent hybrid routing and meaningful local-first agentic behavior. The demo should clearly prove:
+- local reasoning works even if cloud is “disabled/offline”
+- cloud escalation happens only when needed
+- fallback/degrade behavior is robust
+
+TECH STACK REQUIREMENTS
+Backend:
+- Node.js + Express
+- WebSocket server (ws)
+- CORS enabled
+- Endpoint to call Gemini via Google AI Studio (use env var GEMINI_API_KEY)
+- Integration hook to call local FunctionGemma via Cactus (describe clearly and implement a callable adapter)
+Frontend:
+- Static HTML/CSS/JS served from Express (/public)
+- Uses getUserMedia camera
+- Streams frames over WebSocket at 1 FPS (configurable) with compression
+- Fallback to HTTP POST /frame when streaming off or WS disconnected
+- Uses Web Speech API speechSynthesis for audio guidance
+- Mobile-first UI
+
+ENV VARS
+- GEMINI_API_KEY (Google AI Studio)
+- (Optional) CACTUS_ENDPOINT or CACTUS_FUNCTION_URL (if Cactus exposes FunctionGemma as a local HTTP endpoint)
+- PORT (Replit)
+
+PROJECT STRUCTURE
+/index.js
+/public/index.html
+/public/style.css
+/public/app.js
+
+DO NOT over-engineer. Keep it readable, commented, and reliable. Prefer deterministic behavior over fancy features.
+
+========================
+CORE CONCEPTS TO IMPLEMENT
+========================
+
+A) FRAME STREAMING (Soft real-time)
+- Use WebSockets for streaming “soft real-time” frames at 1 FPS (not video streaming).
+- Each frame:
+  - downscale to max width 512px (keep aspect ratio)
+  - JPEG quality 0.4–0.6
+  - send as base64 data URL
+- Messages:
+  Client -> Server:
+    { type: "hello", userId }
+    { type: "frame", userId, ts, imageDataUrl, mode }   // mode: "hazard" | "qa"
+    { type: "question", userId, ts, text }
+    { type: "set", userId, cloudEnabled, offlineSimulated } // toggles for demo
+  Server -> Client:
+    { type: "update", ts, routed, reason, confidence, hazards, say, speak, debug }
+
+B) AGENTIC WORKFLOW (Local-first)
+Implement a simple agent loop per user/session:
+1) PERCEIVE: run local FunctionGemma inference (via Cactus adapter) to produce structured JSON:
+   - labels/objects (coarse)
+   - hazards list (stairs, dropoff, obstacle)
+   - confidence score 0..1
+   - short local “say” suggestion (<= 1 sentence)
+2) ROUTE: decide whether to call Gemini
+3) ACT: return final message (local or cloud) + speak gating
+
+C) SMART HYBRID ROUTING (the judging centerpiece)
+Implement a routing policy function (well-commented) that takes:
+- offlineSimulated (UI toggle) OR actual connectivity signal from client
+- cloudEnabled toggle
+- mode ("hazard" or "qa")
+- local confidence score
+- a latency budget (hazard budget small, qa budget larger)
+- lastCloudCallTs (rate limiting)
+and returns:
+- routed: "local" | "cloud"
+- reason string
+
+Routing rules (must implement):
+1) If mode == "hazard" => ALWAYS LOCAL (latency + safety)
+2) If offlineSimulated == true OR cloudEnabled == false => LOCAL
+3) If confidence >= 0.75 => LOCAL
+4) Else if last cloud call was < 5 seconds ago => LOCAL (avoid thrashing)
+5) Else => CLOUD (Gemini)
+
+Cloud fallback logic:
+- If Gemini call errors or times out (>2.5s), return LOCAL fallback with safe phrasing.
+
+D) SPEAK GATING (no spam)
+Only speak when:
+- hazard is high severity AND new (not seen in last ~3 seconds), OR
+- user asked a question, OR
+- last spoken was > 4 seconds ago AND message meaningfully changed
+Store lastSpokenTs + lastSpokenHash per session.
+
+E) HTTP FALLBACK (for demo safety)
+Implement:
+POST /frame
+- body: { userId, ts, imageDataUrl, mode, cloudEnabled, offlineSimulated }
+- returns same structure as WS update
+
+POST /ask
+- body: { userId, ts, text, cloudEnabled, offlineSimulated }
+- uses last perceived state + routing; returns { routed, reason, say, speak:true }
+
+Also implement:
+GET /health => "ok"
+
+========================
+FUNCTIONGEMMA VIA CACTUS ADAPTER
+========================
+We need to show “FunctionGemma running locally via Cactus”. Implement an adapter function in backend:
+
+async function runFunctionGemmaLocal({ imageDataUrl, mode }) -> {
+  confidence: number,
+  hazards: [{label,pos,severity}],
+  tags: string[],
+  short: string
+}
+
+Implementation detail:
+- If CACTUS endpoint is provided (CACTUS_FUNCTION_URL), call it with fetch.
+- If not provided, use a deterministic mock that STILL demonstrates the routing and agent behavior (so the app is runnable). The mock must:
+  - derive a pseudo confidence from image size/hash
+  - occasionally output a “stairs” hazard when the user toggles “Test Hazard” in UI OR when mode==hazard and a checkbox is set
+Add a UI “Test Hazard” toggle that causes local inference to output a stairs hazard (for guaranteed demo).
+
+Even if mocked, all code and comments must clearly explain where FunctionGemma + Cactus would be used in a real setup, and the adapter should be written so replacing the mock with the real Cactus endpoint is one line.
+
+========================
+GEMINI VIA GOOGLE AI STUDIO
+========================
+Implement async function callGeminiCloud({ question, lastSceneSummary }) -> string
+- Use GEMINI_API_KEY
+- Keep output short (1–2 sentences) and safety-aware (“I might be wrong”)
+- Include prompt that it’s a mobility assistant; do not claim certainty like “path is clear”
+- Add timeout protection (2.5s)
+
+Prompt strategy:
+- Provide lastSceneSummary from local perception
+- Ask Gemini to answer user question concisely and safely
+
+========================
+FRONTEND (PHONE-RUNNABLE)
+========================
+Build a mobile-first single page UI with:
+
+1) Header:
+- App name: EchoPath
+- Subtitle: “Local-first conversational mobility assistant (prototype)”
+
+2) Controls:
+- Start Camera button
+- Streaming toggle (WebSocket)
+- FPS slider (0.5–2 FPS) default 1
+- Cloud Enabled toggle (on/off) for demo
+- Offline Mode toggle (simulate no internet)
+- Mode selector: Hazard mode vs Q&A mode
+- “Test Hazard” toggle (forces local hazard output for demo)
+
+3) Question box:
+- input + Send button (sends WS question or HTTP /ask fallback)
+
+4) Status panel (important for judges):
+- Connection: WS connected/disconnected + fallback status
+- Last routed: LOCAL or CLOUD
+- Reason: hazard_low_latency / offline / high_confidence / low_confidence_escalate
+- Confidence: 0.xx
+- Latency ms (measure time from send frame -> receive update)
+
+5) Output panel:
+- “What I’m saying” text
+- Hazards list badges (STAIRS / OBSTACLE)
+- A small “Privacy note”: “Frames processed locally unless escalated.”
+
+6) Speech:
+- Use speechSynthesis; cancel previous utterance before speaking new
+- Speak only if speak==true
+- Add a “Mute” toggle for safety while testing
+
+Camera streaming implementation details:
+- Use <video> + hidden <canvas>
+- On interval (1000/fps ms):
+  - draw video frame to canvas scaled to 512 width
+  - canvas.toDataURL("image/jpeg", quality)
+  - send via WS if connected + streaming enabled else POST /frame
+- Handle WS disconnect: automatically switch to HTTP fallback and show banner “WebSocket down → using HTTP fallback”
+
+========================
+DELIVERABLES
+========================
+1) Working Replit project that serves frontend at /
+2) WebSocket streaming works at 1 FPS on my phone
+3) Hybrid routing is visible and explained in UI
+4) Local-first hazard alerts work even when Cloud Enabled is OFF or Offline Mode is ON
+5) Cloud escalation happens for low confidence or complex questions (when enabled)
+6) HTTP fallback works reliably
+
+========================
+EXTRA: DEMO MODE (HIGHLY RECOMMENDED)
+========================
+Add a “Demo Script” panel (collapsed) listing the 3 steps I should do to show judges:
+1) Turn Cloud OFF + Offline ON → show LOCAL hazard alert
+2) Turn Cloud ON + Offline OFF → ask a complex question → show CLOUD route
+3) Toggle Test Hazard → instant LOCAL “Stop—stairs ahead” message
+
+Now implement everything with clear comments and keep it robust. Make it runnable with one click.
