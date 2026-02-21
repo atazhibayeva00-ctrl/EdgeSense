@@ -121,6 +121,9 @@ export default function EchoPathPage() {
     ws.onclose = () => {
       setConnectionStatus("disconnected");
       wsRef.current = null;
+      setTimeout(() => {
+        if (cameraActive) connectWebSocket();
+      }, 2000);
     };
 
     ws.onerror = () => {
@@ -129,7 +132,7 @@ export default function EchoPathPage() {
     };
 
     wsRef.current = ws;
-  }, [cloudEnabled, offlineSimulated, testHazard, handleUpdate]);
+  }, [cloudEnabled, offlineSimulated, testHazard, handleUpdate, cameraActive]);
 
   useEffect(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
