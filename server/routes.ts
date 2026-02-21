@@ -305,7 +305,15 @@ export async function registerRoutes(
     });
   });
 
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on("upgrade", (req, socket, head) => {
+    if (req.url === "/ws") {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+    }
+  });
 
   wss.on("connection", (ws: WebSocket) => {
     let userId = "";
