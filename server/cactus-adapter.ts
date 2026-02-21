@@ -1,17 +1,15 @@
 import { log } from "./index";
-import type { LocalInferenceResult, Hazard } from "@shared/schema";
-import crypto from "crypto";
+import type { LocalInferenceResult } from "@shared/schema";
 
 const CACTUS_ENDPOINT = process.env.CACTUS_ENDPOINT_URL || "";
 
-function hashImage(imageDataUrl: string): number {
-  const hash = crypto.createHash("md5").update(imageDataUrl.slice(0, 500)).digest();
-  return (hash[0] + hash[1] * 256) / 65535;
-}
+async function runCactusRemote(imageDataUrl: string, mode: string, _testHazard: boolean): Promise<LocalInferenceResult> {
+  if (!CACTUS_ENDPOINT) {
+    throw new Error("CACTUS_ENDPOINT_URL is not set. Run the Cactus Python service and set the env var.");
+  }
 
-async function runCactusRemote(imageDataUrl: string, mode: string, testHazard: boolean): Promise<LocalInferenceResult> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2000);
+  const timeout = setTimeout(() => controller.abort(), 10000);
 
   try {
     const res = await fetch(`${CACTUS_ENDPOINT}/infer`, {
@@ -21,31 +19,36 @@ async function runCactusRemote(imageDataUrl: string, mode: string, testHazard: b
         messages: [
           {
             role: "system",
-            content: "You are a mobility safety assistant analyzing camera frames. Return JSON with: tags (string array of objects seen), hazards (array of {label, pos, severity}), confidence (0-1), short (one sentence description)."
+            content:
+              "You are a mobility safety assistant. Analyze the image and respond with ONLY a valid JSON object (no markdown) with keys: confidence (0-1), hazards (array of {label, pos, severity}), tags (array of strings), short (one sentence).",
           },
           {
             role: "user",
-            content: mode === "hazard"
-              ? "Analyze this image for mobility hazards like stairs, obstacles, drop-offs, curbs. Report any dangers."
-              : "Describe what you see in this scene briefly.",
-            images: [imageDataUrl]
-          }
+            content:
+              mode === "hazard"
+                ? "Analyze this image for mobility hazards (stairs, obstacles, drop-offs, curbs). Report any dangers in the JSON."
+                : "Describe what you see in this scene briefly, in the JSON short field.",
+            images: [imageDataUrl],
+          },
         ],
-        tools: mode === "hazard" ? [{
-          function: {
-            name: "report_hazards",
-            description: "Report detected hazards in the scene",
-            parameters: {
-              properties: {
-                hazards: { type: "array", description: "List of hazards with label, position, severity" },
-                confidence: { type: "number", description: "Confidence 0-1" },
-                tags: { type: "array", description: "Objects detected" },
-                short: { type: "string", description: "One sentence summary" }
+        tools: [
+          {
+            function: {
+              name: "report_hazards",
+              description: "Report detected hazards and scene summary",
+              parameters: {
+                type: "object",
+                properties: {
+                  hazards: { type: "array", description: "List of {label, pos, severity}" },
+                  confidence: { type: "number", description: "Confidence 0-1" },
+                  tags: { type: "array", description: "Objects detected" },
+                  short: { type: "string", description: "One sentence summary" },
+                },
+                required: ["hazards", "confidence", "tags", "short"],
               },
-              required: ["hazards", "confidence", "tags", "short"]
-            }
-          }
-        }] : undefined
+            },
+          },
+        ],
       }),
       signal: controller.signal,
     });
@@ -53,81 +56,43 @@ async function runCactusRemote(imageDataUrl: string, mode: string, testHazard: b
     clearTimeout(timeout);
 
     if (!res.ok) {
+      const errBody = await res.text();
+      log(`Cactus HTTP ${res.status}: ${errBody.slice(0, 200)}`, "cactus");
       throw new Error(`Cactus returned ${res.status}`);
     }
 
     const data = await res.json();
+    if (data.error && res.status >= 400) {
+      throw new Error(data.error || "Cactus service error");
+    }
+
     const responseText = data.response || "";
 
     try {
       const parsed = JSON.parse(responseText);
       return {
-        confidence: Math.min(1, Math.max(0, parsed.confidence || 0.5)),
+        confidence: Math.min(1, Math.max(0, parsed.confidence ?? 0.5)),
         hazards: (parsed.hazards || []).map((h: any) => ({
           label: h.label || "unknown",
           pos: h.pos || "ahead",
           severity: h.severity || "medium",
         })),
-        tags: parsed.tags || [],
+        tags: Array.isArray(parsed.tags) ? parsed.tags : [],
         short: parsed.short || "Scene analyzed.",
-        cloud_handoff: data.cloud_handoff || false,
+        cloud_handoff: data.cloud_handoff === true,
       };
     } catch {
       return {
-        confidence: 0.6,
+        confidence: 0.5,
         hazards: [],
         tags: [],
-        short: responseText.slice(0, 100) || "Scene analyzed.",
-        cloud_handoff: data.cloud_handoff || false,
+        short: responseText.slice(0, 200) || "Scene analyzed.",
+        cloud_handoff: data.cloud_handoff === true,
       };
     }
-  } catch (err: any) {
+  } finally {
     clearTimeout(timeout);
-    throw err;
   }
-}
-
-function runMockLocal(imageDataUrl: string, mode: string, testHazard: boolean): LocalInferenceResult {
-  const h = hashImage(imageDataUrl);
-  const confidence = 0.55 + h * 0.4;
-
-  const baseTags = ["floor", "wall", "lighting"];
-  if (h > 0.6) baseTags.push("doorway");
-  if (h > 0.8) baseTags.push("furniture");
-
-  const hazards: Hazard[] = [];
-
-  if (testHazard) {
-    hazards.push({ label: "stairs", pos: "ahead 2m", severity: "high" });
-    return {
-      confidence: 0.92,
-      hazards,
-      tags: [...baseTags, "stairs"],
-      short: "Stop -- stairs detected directly ahead.",
-      cloud_handoff: false,
-    };
-  }
-
-  if (mode === "hazard") {
-    if (h < 0.15) {
-      hazards.push({ label: "obstacle", pos: "left", severity: "medium" });
-    }
-    if (h > 0.9) {
-      hazards.push({ label: "curb", pos: "ahead", severity: "medium" });
-    }
-  }
-
-  const short = hazards.length > 0
-    ? `Caution: ${hazards.map(h => h.label).join(", ")} detected nearby.`
-    : "Path appears clear. Proceed with caution.";
-
-  return {
-    confidence: Math.round(confidence * 100) / 100,
-    hazards,
-    tags: baseTags,
-    short,
-    cloud_handoff: false,
-  };
 }
 
 export async function runFunctionGemmaLocal(params: {
@@ -136,21 +101,35 @@ export async function runFunctionGemmaLocal(params: {
   testHazard: boolean;
 }): Promise<LocalInferenceResult> {
   const startMs = Date.now();
-
-  if (CACTUS_ENDPOINT) {
-    try {
-      const result = await runCactusRemote(params.imageDataUrl, params.mode, params.testHazard);
-      const elapsed = Date.now() - startMs;
-      log(`Cactus inference: ${elapsed}ms, confidence=${result.confidence}, hazards=${result.hazards.length}`, "cactus");
-      return result;
-    } catch (err: any) {
-      log(`Cactus endpoint error: ${err.message}, falling back to mock`, "cactus");
-    }
-  }
-
-  await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
-  const result = runMockLocal(params.imageDataUrl, params.mode, params.testHazard);
+  const result = await runCactusRemote(params.imageDataUrl, params.mode, params.testHazard);
   const elapsed = Date.now() - startMs;
-  log(`Mock local inference: ${elapsed}ms, confidence=${result.confidence}, hazards=${result.hazards.length}`, "cactus-mock");
+  log(`Cactus inference: ${elapsed}ms, confidence=${result.confidence}, hazards=${result.hazards.length}`, "cactus");
   return result;
+}
+
+/** Voice-to-action (Rubric 3): transcribe audio via Cactus Whisper. */
+export async function transcribeCactus(audioBase64: string, contentType = "audio/wav"): Promise<string> {
+  if (!CACTUS_ENDPOINT) {
+    throw new Error("CACTUS_ENDPOINT_URL is not set. Run the Cactus Python service for voice.");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`${CACTUS_ENDPOINT}/transcribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audio_base64: audioBase64, content_type: contentType }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    const data = await res.json();
+    if (data.error && !data.transcript) {
+      throw new Error(data.error || "Transcribe failed");
+    }
+    const transcript = (data.transcript ?? "").trim();
+    log(`Cactus transcribe: ${transcript.slice(0, 60)}...`, "cactus");
+    return transcript;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

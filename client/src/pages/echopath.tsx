@@ -31,6 +31,8 @@ import {
   MessageSquare,
   TriangleAlert,
   Activity,
+  Mic,
+  Square,
 } from "lucide-react";
 import type { UpdateMessage, Hazard } from "@shared/schema";
 
@@ -53,12 +55,17 @@ export default function EchoPathPage() {
   const [localCount, setLocalCount] = useState(0);
   const [cloudCount, setCloudCount] = useState(0);
   const [demoOpen, setDemoOpen] = useState(false);
+  const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceLoading, setVoiceLoading] = useState(false);
+  const [lastTranscript, setLastTranscript] = useState("");
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userIdRef = useRef(`user_${Math.random().toString(36).slice(2, 8)}`);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   const speak = useCallback((text: string) => {
     if (muted || !text) return;
@@ -283,6 +290,68 @@ export default function EchoPathPage() {
     setQuestion("");
   }, [question, cloudEnabled, offlineSimulated, handleUpdate]);
 
+  const startVoiceRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: mime });
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          const base64 = dataUrl.split(",")[1] || "";
+          if (!base64) {
+            setVoiceLoading(false);
+            return;
+          }
+          setVoiceLoading(true);
+          fetch("/api/voice", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId: userIdRef.current,
+              audioBase64: base64,
+              contentType: mime,
+              cloudEnabled,
+              offlineSimulated,
+            }),
+          })
+            .then((r) => r.json())
+            .then((data) => {
+              setVoiceLoading(false);
+              if (data.transcript !== undefined) setLastTranscript(data.transcript);
+              if (data.type === "update") handleUpdate(data);
+              if (data.speak && data.say) speak(data.say);
+            })
+            .catch((err) => {
+              console.error("Voice error:", err);
+              setVoiceLoading(false);
+            });
+        };
+        reader.readAsDataURL(blob);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start(200);
+      setVoiceRecording(true);
+    } catch (err) {
+      console.error("Mic access denied:", err);
+    }
+  }, [cloudEnabled, offlineSimulated, handleUpdate, speak]);
+
+  const stopVoiceRecording = useCallback(() => {
+    if (mediaRecorderRef.current && voiceRecording) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current = null;
+      setVoiceRecording(false);
+    }
+  }, [voiceRecording]);
+
   const connectionIcon = () => {
     switch (connectionStatus) {
       case "connected": return <Wifi className="w-4 h-4 text-green-500 dark:text-green-400" />;
@@ -479,6 +548,48 @@ export default function EchoPathPage() {
             <Send className="w-4 h-4" />
           </Button>
         </div>
+
+        {/* Voice (Rubric 3: voice-to-action) */}
+        <Card>
+          <CardContent className="p-4 space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Label className="text-sm font-medium flex items-center gap-1">
+                <Mic className="w-4 h-4" />
+                Talk to assistant
+              </Label>
+              {!voiceRecording ? (
+                <Button
+                  data-testid="button-voice-start"
+                  size="sm"
+                  variant="default"
+                  onClick={startVoiceRecording}
+                  disabled={voiceLoading}
+                >
+                  <Mic className="w-4 h-4 mr-1" />
+                  {voiceLoading ? "Processing…" : "Tap to talk"}
+                </Button>
+              ) : (
+                <Button
+                  data-testid="button-voice-stop"
+                  size="sm"
+                  variant="destructive"
+                  onClick={stopVoiceRecording}
+                >
+                  <Square className="w-4 h-4 mr-1" />
+                  Stop
+                </Button>
+              )}
+            </div>
+            {lastTranscript && (
+              <p className="text-xs text-muted-foreground">
+                You said: <span className="font-medium text-foreground">{lastTranscript}</span>
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Uses Cactus Whisper for transcription, then same Q&A pipeline with TTS response.
+            </p>
+          </CardContent>
+        </Card>
 
         {/* Routing Status Panel */}
         <Card>
