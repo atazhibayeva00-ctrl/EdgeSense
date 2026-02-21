@@ -2,9 +2,9 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { runFunctionGemmaLocal } from "./cactus-adapter";
+import { runFunctionGemmaLocal, transcribeCactus } from "./cactus-adapter";
 import { callGeminiCloud } from "./gemini-cloud";
-import { routeDecision, shouldSpeak } from "./router";
+import { routeDecision, shouldSpeak, isLocalResultValid } from "./router";
 import { log } from "./index";
 import type { UpdateMessage, SessionState } from "@shared/schema";
 
@@ -17,24 +17,40 @@ async function processFrame(params: {
   const startMs = Date.now();
   const session = storage.getSession(params.userId);
 
-  const localResult = await runFunctionGemmaLocal({
-    imageDataUrl: params.imageDataUrl,
-    mode: params.mode,
-    testHazard: session.testHazard,
-  });
+  let localResult: Awaited<ReturnType<typeof runFunctionGemmaLocal>>;
+  try {
+    localResult = await runFunctionGemmaLocal({
+      imageDataUrl: params.imageDataUrl,
+      mode: params.mode,
+      testHazard: session.testHazard,
+    });
+  } catch (err: any) {
+    log(`Local inference failed: ${err.message}, escalating to cloud`, "cactus");
+    localResult = {
+      confidence: 0,
+      hazards: [],
+      tags: [],
+      short: "Local analysis unavailable.",
+      cloud_handoff: true,
+    };
+  }
 
   session.lastSceneSummary = `Tags: ${localResult.tags.join(", ")}. ${localResult.short}`;
+
+  const resultValid = isLocalResultValid(localResult);
 
   const decision = routeDecision({
     session,
     mode: params.mode,
     localConfidence: localResult.confidence,
     isQuestion: false,
+    localResultValid: resultValid,
   });
 
   let finalSay = localResult.short;
 
-  if (decision.routed === "cloud") {
+  const useCloud = decision.routed === "cloud" || localResult.cloud_handoff;
+  if (useCloud) {
     try {
       const cloudResponse = await callGeminiCloud({
         lastSceneSummary: session.lastSceneSummary,
@@ -42,10 +58,15 @@ async function processFrame(params: {
       finalSay = cloudResponse;
       session.lastCloudCallTs = Date.now();
       session.stats.cloudCount++;
+      if (localResult.cloud_handoff) {
+        decision.routed = "cloud";
+        decision.reason = "local_handoff_to_cloud";
+      }
     } catch {
       finalSay = localResult.short;
       decision.routed = "local";
       decision.reason = "cloud_fallback_error";
+      session.stats.localCount++;
     }
   } else {
     session.stats.localCount++;
@@ -213,6 +234,59 @@ export async function registerRoutes(
       res.json(result);
     } catch (err: any) {
       log(`POST /api/ask error: ${err.message}`, "error");
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /** Voice-to-action (Rubric 3): audio → Cactus transcribe → Q&A pipeline → response + TTS */
+  app.post("/api/voice", async (req, res) => {
+    try {
+      const { userId, audioBase64, contentType, cloudEnabled, offlineSimulated } = req.body;
+      if (!userId || !audioBase64) {
+        return res.status(400).json({ error: "userId and audioBase64 required" });
+      }
+
+      const session = storage.getSession(userId);
+      if (cloudEnabled !== undefined) session.cloudEnabled = cloudEnabled;
+      if (offlineSimulated !== undefined) session.offlineSimulated = offlineSimulated;
+      storage.updateSession(userId, session);
+
+      let transcript: string;
+      try {
+        transcript = await transcribeCactus(audioBase64, contentType || "audio/wav");
+      } catch (err: any) {
+        log(`Transcribe failed: ${err.message}`, "cactus");
+        return res.status(502).json({
+          error: "Transcription unavailable",
+          transcript: "",
+          say: "I couldn't hear you. Please check the Cactus service and try again.",
+        });
+      }
+
+      if (!transcript.trim()) {
+        return res.json({
+          type: "update",
+          ts: Date.now(),
+          routed: "local" as const,
+          reason: "voice_no_speech",
+          confidence: 0,
+          hazards: [],
+          say: "I didn't catch that. Try speaking again.",
+          speak: true,
+          transcript: "",
+          debug: `edge=${session.stats.localCount} cloud=${session.stats.cloudCount}`,
+        });
+      }
+
+      const result = await processQuestion({
+        userId,
+        text: transcript,
+        ts: Date.now(),
+      });
+
+      res.json({ ...result, transcript });
+    } catch (err: any) {
+      log(`POST /api/voice error: ${err.message}`, "error");
       res.status(500).json({ error: err.message });
     }
   });
