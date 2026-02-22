@@ -103,63 +103,78 @@ export default function EchoPathPage() {
     ]);
   }, []);
 
-  const ttsVoicesReady = useRef(false);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsAbortRef = useRef<AbortController | null>(null);
+  const ttsSpeakingRef = useRef(false);
   const ttsPendingRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!("speechSynthesis" in window)) return;
-    const loadVoices = () => {
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) ttsVoicesReady.current = true;
-    };
-    loadVoices();
-    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
-    return () => window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
+  const stopCurrentAudio = useCallback(() => {
+    if (ttsAbortRef.current) {
+      ttsAbortRef.current.abort();
+      ttsAbortRef.current = null;
+    }
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current.currentTime = 0;
+      ttsAudioRef.current = null;
+    }
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    ttsSpeakingRef.current = false;
   }, []);
 
   const speak = useCallback((text: string) => {
     if (muted || !text) return;
 
-    if (ttsAudioRef.current) {
-      ttsAudioRef.current.pause();
-      ttsAudioRef.current = null;
-    }
+    stopCurrentAudio();
+
+    const abort = new AbortController();
+    ttsAbortRef.current = abort;
+    ttsSpeakingRef.current = true;
 
     fetch("/api/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
+      signal: abort.signal,
     })
       .then((res) => {
         if (!res.ok) throw new Error("TTS API failed");
         return res.blob();
       })
       .then((blob) => {
+        if (abort.signal.aborted) return;
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         audio.volume = 1.0;
         ttsAudioRef.current = audio;
-        audio.onended = () => URL.revokeObjectURL(url);
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          ttsSpeakingRef.current = false;
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          ttsSpeakingRef.current = false;
+        };
         audio.play().catch(() => {
           ttsPendingRef.current = text;
-          console.warn("Audio autoplay blocked, will retry on next interaction");
+          ttsSpeakingRef.current = false;
         });
       })
-      .catch(() => {
+      .catch((err) => {
+        if (err.name === "AbortError") return;
+        ttsSpeakingRef.current = false;
         if (!("speechSynthesis" in window)) return;
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.rate = 0.95;
         utterance.volume = 1.0;
-        if (ttsVoicesReady.current) {
-          const voices = window.speechSynthesis.getVoices();
-          const preferred = voices.find(v => v.lang.startsWith("en") && v.localService) || voices.find(v => v.lang.startsWith("en"));
-          if (preferred) utterance.voice = preferred;
-        }
+        utterance.onend = () => { ttsSpeakingRef.current = false; };
         window.speechSynthesis.speak(utterance);
+        ttsSpeakingRef.current = true;
       });
-  }, [muted]);
+  }, [muted, stopCurrentAudio]);
 
   useEffect(() => {
     const retryPending = () => {
