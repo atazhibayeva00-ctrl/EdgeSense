@@ -33,10 +33,26 @@ import {
   Activity,
   Mic,
   Square,
+  Settings2,
+  Waves,
+  CircleAlert,
+  History,
 } from "lucide-react";
 import type { UpdateMessage, Hazard } from "@shared/schema";
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "fallback";
+
+interface ConversationEntry {
+  id: number;
+  timestamp: number;
+  type: "assistant" | "user" | "hazard";
+  text: string;
+  routed?: "local" | "cloud";
+  hazards?: Hazard[];
+  latencyMs?: number;
+}
+
+let entryIdCounter = 0;
 
 export default function EchoPathPage() {
   const [cameraActive, setCameraActive] = useState(false);
@@ -55,9 +71,14 @@ export default function EchoPathPage() {
   const [localCount, setLocalCount] = useState(0);
   const [cloudCount, setCloudCount] = useState(0);
   const [demoOpen, setDemoOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceLoading, setVoiceLoading] = useState(false);
   const [lastTranscript, setLastTranscript] = useState("");
+  const [cameraError, setCameraError] = useState("");
+  const [micError, setMicError] = useState("");
+  const [conversation, setConversation] = useState<ConversationEntry[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -66,6 +87,22 @@ export default function EchoPathPage() {
   const userIdRef = useRef(`user_${Math.random().toString(36).slice(2, 8)}`);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const conversationEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = useCallback(() => {
+    conversationEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [conversation, scrollToBottom]);
+
+  const addConversationEntry = useCallback((entry: Omit<ConversationEntry, "id" | "timestamp">) => {
+    setConversation((prev) => [
+      ...prev,
+      { ...entry, id: ++entryIdCounter, timestamp: Date.now() },
+    ]);
+  }, []);
 
   const speak = useCallback((text: string) => {
     if (muted || !text) return;
@@ -81,6 +118,7 @@ export default function EchoPathPage() {
 
   const handleUpdate = useCallback((update: UpdateMessage) => {
     setLastUpdate(update);
+    setIsAnalyzing(false);
     if (update.latencyMs) setLatencyMs(update.latencyMs);
 
     const total = (update.debug?.match(/edge=(\d+)/)?.[1] || "0");
@@ -92,10 +130,21 @@ export default function EchoPathPage() {
     const t = l + c;
     setEdgeRatio(t > 0 ? Math.round((l / t) * 100) : 100);
 
+    if (update.say) {
+      const hasHazards = update.hazards && update.hazards.length > 0;
+      addConversationEntry({
+        type: hasHazards ? "hazard" : "assistant",
+        text: update.say,
+        routed: update.routed as "local" | "cloud",
+        hazards: update.hazards,
+        latencyMs: update.latencyMs,
+      });
+    }
+
     if (update.speak) {
       speak(update.say);
     }
-  }, [speak]);
+  }, [speak, addConversationEntry]);
 
   const connectWebSocket = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -170,6 +219,7 @@ export default function EchoPathPage() {
   }, []);
 
   const sendFrame = useCallback(async (imageDataUrl: string) => {
+    setIsAnalyzing(true);
     const msg = {
       type: "frame" as const,
       userId: userIdRef.current,
@@ -197,13 +247,14 @@ export default function EchoPathPage() {
         if (data.type === "update") {
           handleUpdate(data);
         }
-      } catch (err) {
-        console.error("HTTP fallback error:", err);
+      } catch {
+        setIsAnalyzing(false);
       }
     }
   }, [mode, cloudEnabled, offlineSimulated, testHazard, handleUpdate]);
 
   const startCamera = useCallback(async () => {
+    setCameraError("");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } },
@@ -215,8 +266,15 @@ export default function EchoPathPage() {
       }
       setCameraActive(true);
       connectWebSocket();
-    } catch (err) {
-      console.error("Camera access denied:", err);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      if (message.includes("Permission") || message.includes("NotAllowed")) {
+        setCameraError("Camera permission denied. Please allow camera access in your browser settings.");
+      } else if (message.includes("NotFound")) {
+        setCameraError("No camera found. Please connect a camera and try again.");
+      } else {
+        setCameraError(`Could not access camera: ${message}`);
+      }
     }
   }, [connectWebSocket]);
 
@@ -258,6 +316,8 @@ export default function EchoPathPage() {
   const sendQuestion = useCallback(async () => {
     if (!question.trim()) return;
 
+    addConversationEntry({ type: "user", text: question.trim() });
+
     const msg = {
       type: "question" as const,
       userId: userIdRef.current,
@@ -282,15 +342,16 @@ export default function EchoPathPage() {
         if (data.type === "update") {
           handleUpdate(data);
         }
-      } catch (err) {
-        console.error("Question error:", err);
+      } catch {
+        addConversationEntry({ type: "assistant", text: "Sorry, I couldn't process your question. Please try again." });
       }
     }
 
     setQuestion("");
-  }, [question, cloudEnabled, offlineSimulated, handleUpdate]);
+  }, [question, cloudEnabled, offlineSimulated, handleUpdate, addConversationEntry]);
 
   const startVoiceRecording = useCallback(async () => {
+    setMicError("");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
@@ -325,13 +386,16 @@ export default function EchoPathPage() {
             .then((r) => r.json())
             .then((data) => {
               setVoiceLoading(false);
-              if (data.transcript !== undefined) setLastTranscript(data.transcript);
+              if (data.transcript !== undefined) {
+                setLastTranscript(data.transcript);
+                addConversationEntry({ type: "user", text: data.transcript });
+              }
               if (data.type === "update") handleUpdate(data);
               if (data.speak && data.say) speak(data.say);
             })
-            .catch((err) => {
-              console.error("Voice error:", err);
+            .catch(() => {
               setVoiceLoading(false);
+              addConversationEntry({ type: "assistant", text: "Voice processing failed. Please try again." });
             });
         };
         reader.readAsDataURL(blob);
@@ -339,10 +403,15 @@ export default function EchoPathPage() {
       mediaRecorderRef.current = recorder;
       recorder.start(200);
       setVoiceRecording(true);
-    } catch (err) {
-      console.error("Mic access denied:", err);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      if (message.includes("Permission") || message.includes("NotAllowed")) {
+        setMicError("Microphone permission denied. Please allow microphone access.");
+      } else {
+        setMicError(`Could not access microphone: ${message}`);
+      }
     }
-  }, [cloudEnabled, offlineSimulated, handleUpdate, speak]);
+  }, [cloudEnabled, offlineSimulated, handleUpdate, speak, addConversationEntry]);
 
   const stopVoiceRecording = useCallback(() => {
     if (mediaRecorderRef.current && voiceRecording) {
@@ -352,375 +421,500 @@ export default function EchoPathPage() {
     }
   }, [voiceRecording]);
 
-  const connectionIcon = () => {
-    switch (connectionStatus) {
-      case "connected": return <Wifi className="w-4 h-4 text-green-500 dark:text-green-400" />;
-      case "connecting": return <Radio className="w-4 h-4 text-yellow-500 dark:text-yellow-400 animate-pulse" />;
-      case "fallback": return <Activity className="w-4 h-4 text-orange-500 dark:text-orange-400" />;
-      default: return <WifiOff className="w-4 h-4 text-muted-foreground" />;
-    }
-  };
+  const connectionColor = {
+    connected: "bg-emerald-500",
+    connecting: "bg-amber-500",
+    fallback: "bg-orange-500",
+    disconnected: "bg-zinc-400",
+  }[connectionStatus];
 
-  const connectionLabel = () => {
-    switch (connectionStatus) {
-      case "connected": return "WS Connected";
-      case "connecting": return "Connecting...";
-      case "fallback": return "HTTP Fallback";
-      default: return "Disconnected";
-    }
+  const formatTime = (ts: number) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Shield className="w-5 h-5 text-foreground" />
-            <h1 className="text-lg font-semibold">EchoPath</h1>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {connectionIcon()}
-            <span className="text-xs text-muted-foreground">{connectionLabel()}</span>
-            <Button
-              data-testid="button-mute"
-              size="icon"
-              variant="ghost"
-              onClick={() => setMuted(!muted)}
-            >
-              {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            </Button>
+      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="px-4 py-3">
+          <div className="flex items-center justify-between max-w-lg mx-auto">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                <Shield className="w-4.5 h-4.5 text-primary" aria-hidden="true" />
+              </div>
+              <div>
+                <h1 className="text-base font-semibold leading-tight">EchoPath</h1>
+                <p className="text-[11px] text-muted-foreground leading-tight">Mobility Assistant</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1" role="status" aria-label={`Connection: ${connectionStatus}`}>
+                <span className={`w-2 h-2 rounded-full ${connectionColor} ${connectionStatus === "connecting" ? "animate-pulse" : ""}`} />
+                <span className="text-[11px] font-medium text-muted-foreground capitalize">{connectionStatus}</span>
+              </div>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8"
+                onClick={() => setMuted(!muted)}
+                aria-label={muted ? "Unmute audio" : "Mute audio"}
+              >
+                {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+              </Button>
+            </div>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground mt-1">
-          Local-first conversational mobility assistant (prototype)
-        </p>
+
+        {/* Connection warning banner */}
+        {(connectionStatus === "disconnected" && cameraActive) && (
+          <div className="bg-destructive/10 border-t border-destructive/20 px-4 py-2" role="alert">
+            <div className="flex items-center gap-2 max-w-lg mx-auto">
+              <WifiOff className="w-3.5 h-3.5 text-destructive flex-shrink-0" />
+              <span className="text-xs text-destructive font-medium">Connection lost. Reconnecting...</span>
+            </div>
+          </div>
+        )}
+        {connectionStatus === "fallback" && (
+          <div className="bg-orange-500/10 border-t border-orange-500/20 px-4 py-2" role="alert">
+            <div className="flex items-center gap-2 max-w-lg mx-auto">
+              <Activity className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400 flex-shrink-0" />
+              <span className="text-xs text-orange-600 dark:text-orange-400 font-medium">WebSocket unavailable — using HTTP fallback</span>
+            </div>
+          </div>
+        )}
       </header>
 
-      <main className="flex-1 p-4 space-y-4 max-w-lg mx-auto w-full">
-        {/* Camera Preview */}
-        <div className="relative rounded-md bg-muted aspect-video flex items-center justify-center">
-          <video
-            ref={videoRef}
-            className={`w-full h-full object-cover rounded-md ${!cameraActive ? "hidden" : ""}`}
-            playsInline
-            muted
-            data-testid="video-camera"
-          />
-          {!cameraActive && (
-            <div className="flex flex-col items-center gap-2 text-muted-foreground">
-              <CameraOff className="w-8 h-8" />
-              <span className="text-sm">Camera off</span>
-            </div>
-          )}
-          <canvas ref={canvasRef} className="hidden" />
+      <main className="flex-1 p-4 space-y-4 max-w-lg mx-auto w-full pb-8">
+        {/* Camera Section */}
+        <section aria-label="Camera preview">
+          <div className="relative rounded-xl overflow-hidden bg-muted aspect-video border">
+            <video
+              ref={videoRef}
+              className={`w-full h-full object-cover ${!cameraActive ? "hidden" : ""}`}
+              playsInline
+              muted
+              aria-label="Live camera feed"
+            />
+            {!cameraActive && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
+                <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
+                  <Camera className="w-8 h-8 text-primary" />
+                </div>
+                <div className="text-center space-y-1.5">
+                  <p className="text-sm font-medium text-foreground">Start your camera to begin</p>
+                  <p className="text-xs text-muted-foreground max-w-[240px]">
+                    EchoPath will analyze your surroundings and alert you to hazards in real time.
+                  </p>
+                </div>
+                <Button onClick={startCamera} size="lg" className="mt-1 gap-2 rounded-xl">
+                  <Camera className="w-4 h-4" />
+                  Enable Camera
+                </Button>
+                {cameraError && (
+                  <div className="flex items-start gap-2 bg-destructive/10 text-destructive text-xs rounded-lg px-3 py-2 max-w-[300px]" role="alert">
+                    <CircleAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    <span>{cameraError}</span>
+                  </div>
+                )}
+              </div>
+            )}
+            <canvas ref={canvasRef} className="hidden" />
 
-          {/* Streaming indicator */}
-          {streaming && cameraActive && (
-            <div className="absolute top-2 left-2 flex items-center gap-1 bg-destructive/90 text-destructive-foreground px-2 py-0.5 rounded-md text-xs">
-              <div className="w-1.5 h-1.5 bg-destructive-foreground rounded-full animate-pulse" />
-              LIVE {fps} FPS
-            </div>
-          )}
-        </div>
+            {/* Overlay controls when camera is active */}
+            {cameraActive && (
+              <>
+                {/* Live indicator */}
+                {streaming && (
+                  <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-red-600/90 text-white px-2.5 py-1 rounded-full text-[11px] font-semibold tracking-wide shadow-lg">
+                    <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+                    LIVE · {fps} FPS
+                  </div>
+                )}
 
-        {/* Camera Controls */}
-        <div className="flex items-center gap-2 flex-wrap">
+                {/* Analyzing indicator */}
+                {isAnalyzing && (
+                  <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-primary/90 text-primary-foreground px-2.5 py-1 rounded-full text-[11px] font-medium shadow-lg">
+                    <Waves className="w-3 h-3 animate-pulse" />
+                    Analyzing...
+                  </div>
+                )}
+
+                {/* Bottom overlay controls */}
+                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 via-black/30 to-transparent px-3 pt-8 pb-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <Button
+                      onClick={stopCamera}
+                      variant="destructive"
+                      size="sm"
+                      className="rounded-full gap-1.5 shadow-lg h-8 text-xs"
+                    >
+                      <CameraOff className="w-3.5 h-3.5" />
+                      Stop
+                    </Button>
+
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm rounded-full px-2.5 py-1">
+                        <label htmlFor="stream-toggle" className="text-[11px] text-white/80 font-medium cursor-pointer">Stream</label>
+                        <Switch
+                          id="stream-toggle"
+                          checked={streaming}
+                          onCheckedChange={setStreaming}
+                          className="scale-75"
+                          aria-label="Toggle frame streaming"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm rounded-full px-2.5 py-1">
+                        <span className="text-[11px] text-white/80 font-medium">{fps} FPS</span>
+                        <Slider
+                          className="w-14"
+                          min={0.5}
+                          max={2}
+                          step={0.5}
+                          value={[fps]}
+                          onValueChange={([v]) => setFps(v)}
+                          aria-label="Frames per second"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+
+        {/* Mode Selector */}
+        <div className="flex gap-2">
           <Button
-            data-testid="button-start-camera"
-            onClick={cameraActive ? stopCamera : startCamera}
-            variant={cameraActive ? "destructive" : "default"}
             size="sm"
+            variant={mode === "hazard" ? "default" : "secondary"}
+            onClick={() => setMode("hazard")}
+            className="flex-1 gap-1.5 rounded-lg h-9"
+            aria-pressed={mode === "hazard"}
           >
-            {cameraActive ? <CameraOff className="w-4 h-4 mr-1" /> : <Camera className="w-4 h-4 mr-1" />}
-            {cameraActive ? "Stop" : "Start Camera"}
+            <TriangleAlert className="w-3.5 h-3.5" />
+            Hazard Detection
           </Button>
-
-          <div className="flex items-center gap-2">
-            <Label htmlFor="streaming-toggle" className="text-sm">Stream</Label>
-            <Switch
-              id="streaming-toggle"
-              data-testid="switch-streaming"
-              checked={streaming}
-              onCheckedChange={setStreaming}
-              disabled={!cameraActive}
-            />
-          </div>
-
-          <div className="flex items-center gap-2 ml-auto flex-wrap">
-            <Label className="text-xs text-muted-foreground">{fps} FPS</Label>
-            <Slider
-              data-testid="slider-fps"
-              className="w-20"
-              min={0.5}
-              max={2}
-              step={0.5}
-              value={[fps]}
-              onValueChange={([v]) => setFps(v)}
-            />
-          </div>
+          <Button
+            size="sm"
+            variant={mode === "qa" ? "default" : "secondary"}
+            onClick={() => setMode("qa")}
+            className="flex-1 gap-1.5 rounded-lg h-9"
+            aria-pressed={mode === "qa"}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            Q&A Mode
+          </Button>
         </div>
 
-        {/* Mode & Toggles */}
-        <Card>
-          <CardContent className="p-4 space-y-3">
-            {/* Mode Selector */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <Label className="text-sm font-medium">Mode:</Label>
-              <Button
-                data-testid="button-mode-hazard"
-                size="sm"
-                variant={mode === "hazard" ? "default" : "secondary"}
-                onClick={() => setMode("hazard")}
+        {/* Voice Input — Large, Prominent */}
+        <Card className="border-2 border-dashed border-primary/20 bg-primary/[0.02]">
+          <CardContent className="p-5 flex flex-col items-center gap-3">
+            {!voiceRecording ? (
+              <button
+                onClick={voiceLoading ? undefined : startVoiceRecording}
+                disabled={voiceLoading}
+                className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-200 shadow-lg ${
+                  voiceLoading
+                    ? "bg-muted text-muted-foreground cursor-wait"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90 hover:scale-105 active:scale-95 cursor-pointer"
+                }`}
+                aria-label={voiceLoading ? "Processing voice input" : "Tap to start voice recording"}
               >
-                <TriangleAlert className="w-3 h-3 mr-1" />
-                Hazard
-              </Button>
-              <Button
-                data-testid="button-mode-qa"
-                size="sm"
-                variant={mode === "qa" ? "default" : "secondary"}
-                onClick={() => setMode("qa")}
+                {voiceLoading ? (
+                  <Waves className="w-8 h-8 animate-pulse" />
+                ) : (
+                  <Mic className="w-8 h-8" />
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={stopVoiceRecording}
+                className="w-20 h-20 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center transition-all duration-200 shadow-lg hover:scale-105 active:scale-95 cursor-pointer animate-pulse"
+                aria-label="Tap to stop recording"
               >
-                <MessageSquare className="w-3 h-3 mr-1" />
-                Q&A
-              </Button>
+                <Square className="w-7 h-7" />
+              </button>
+            )}
+            <div className="text-center">
+              <p className="text-sm font-medium">
+                {voiceRecording ? "Listening... Tap to stop" : voiceLoading ? "Processing your voice..." : "Tap to talk"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Voice powered by Cactus Whisper
+              </p>
             </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="cloud-toggle" className="text-sm flex items-center gap-1">
-                  {cloudEnabled ? <Cloud className="w-3.5 h-3.5" /> : <CloudOff className="w-3.5 h-3.5" />}
-                  Cloud
-                </Label>
-                <Switch
-                  id="cloud-toggle"
-                  data-testid="switch-cloud"
-                  checked={cloudEnabled}
-                  onCheckedChange={setCloudEnabled}
-                />
+            {lastTranscript && (
+              <div className="w-full bg-muted/50 rounded-lg px-3 py-2 text-center">
+                <p className="text-xs text-muted-foreground">You said:</p>
+                <p className="text-sm font-medium">{lastTranscript}</p>
               </div>
-
-              <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="offline-toggle" className="text-sm flex items-center gap-1">
-                  <WifiOff className="w-3.5 h-3.5" />
-                  Offline
-                </Label>
-                <Switch
-                  id="offline-toggle"
-                  data-testid="switch-offline"
-                  checked={offlineSimulated}
-                  onCheckedChange={setOfflineSimulated}
-                />
+            )}
+            {micError && (
+              <div className="flex items-start gap-2 bg-destructive/10 text-destructive text-xs rounded-lg px-3 py-2" role="alert">
+                <CircleAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                <span>{micError}</span>
               </div>
-
-              <div className="flex items-center justify-between gap-2 col-span-2">
-                <Label htmlFor="hazard-toggle" className="text-sm flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  Test Hazard
-                </Label>
-                <Switch
-                  id="hazard-toggle"
-                  data-testid="switch-test-hazard"
-                  checked={testHazard}
-                  onCheckedChange={setTestHazard}
-                />
-              </div>
-            </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Question Input */}
+        {/* Text Input */}
         <div className="flex items-center gap-2">
           <Input
-            data-testid="input-question"
-            placeholder="Ask about your surroundings..."
+            placeholder="Type a question about your surroundings..."
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && sendQuestion()}
+            className="rounded-lg h-10"
+            aria-label="Type your question"
           />
           <Button
-            data-testid="button-send-question"
             size="icon"
             onClick={sendQuestion}
             disabled={!question.trim()}
+            className="rounded-lg h-10 w-10 flex-shrink-0"
+            aria-label="Send question"
           >
             <Send className="w-4 h-4" />
           </Button>
         </div>
 
-        {/* Voice (Rubric 3: voice-to-action) */}
-        <Card>
-          <CardContent className="p-4 space-y-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <Label className="text-sm font-medium flex items-center gap-1">
-                <Mic className="w-4 h-4" />
-                Talk to assistant
-              </Label>
-              {!voiceRecording ? (
-                <Button
-                  data-testid="button-voice-start"
-                  size="sm"
-                  variant="default"
-                  onClick={startVoiceRecording}
-                  disabled={voiceLoading}
-                >
-                  <Mic className="w-4 h-4 mr-1" />
-                  {voiceLoading ? "Processing…" : "Tap to talk"}
-                </Button>
+        {/* Conversation History */}
+        <section aria-label="Conversation history" aria-live="polite">
+          <div className="flex items-center gap-2 mb-2">
+            <History className="w-4 h-4 text-muted-foreground" />
+            <h2 className="text-sm font-medium">Conversation</h2>
+            {conversation.length > 0 && (
+              <Badge variant="secondary" className="text-[10px] h-5">
+                {conversation.length}
+              </Badge>
+            )}
+          </div>
+
+          <Card>
+            <CardContent className="p-3">
+              {conversation.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-6 text-center">
+                  <Eye className="w-6 h-6 text-muted-foreground/50" />
+                  <p className="text-sm text-muted-foreground">
+                    {cameraActive ? "Waiting for analysis results..." : "Start the camera or ask a question to begin"}
+                  </p>
+                </div>
               ) : (
-                <Button
-                  data-testid="button-voice-stop"
-                  size="sm"
-                  variant="destructive"
-                  onClick={stopVoiceRecording}
-                >
-                  <Square className="w-4 h-4 mr-1" />
-                  Stop
-                </Button>
+                <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+                  {conversation.map((entry) => (
+                    <div key={entry.id} className={`flex gap-2.5 animate-slide-in-up ${entry.type === "user" ? "flex-row-reverse" : ""}`}>
+                      {/* Avatar */}
+                      <div
+                        className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          entry.type === "user"
+                            ? "bg-primary/10"
+                            : entry.type === "hazard"
+                            ? "bg-destructive/10"
+                            : "bg-muted"
+                        }`}
+                      >
+                        {entry.type === "user" ? (
+                          <MessageSquare className="w-3.5 h-3.5 text-primary" />
+                        ) : entry.type === "hazard" ? (
+                          <AlertTriangle className="w-3.5 h-3.5 text-destructive" />
+                        ) : (
+                          <Eye className="w-3.5 h-3.5 text-muted-foreground" />
+                        )}
+                      </div>
+
+                      {/* Bubble */}
+                      <div className={`flex-1 min-w-0 ${entry.type === "user" ? "text-right" : ""}`}>
+                        <div
+                          className={`inline-block rounded-xl px-3 py-2 text-sm leading-relaxed max-w-full ${
+                            entry.type === "user"
+                              ? "bg-primary text-primary-foreground rounded-br-sm"
+                              : entry.type === "hazard"
+                              ? "bg-destructive/10 text-foreground border border-destructive/20 rounded-bl-sm"
+                              : "bg-muted text-foreground rounded-bl-sm"
+                          }`}
+                        >
+                          <p className="break-words">{entry.text}</p>
+                          {entry.hazards && entry.hazards.length > 0 && (
+                            <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                              {entry.hazards.map((h: Hazard, i: number) => (
+                                <Badge
+                                  key={`${h.label}-${i}`}
+                                  variant={h.severity === "high" ? "destructive" : "secondary"}
+                                  className="text-[10px]"
+                                >
+                                  {h.label.toUpperCase()}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className="text-[10px] text-muted-foreground">{formatTime(entry.timestamp)}</span>
+                          {entry.routed && (
+                            <Badge variant="outline" className="text-[9px] h-4 px-1.5 font-normal">
+                              {entry.routed === "local" ? "Edge" : "Cloud"}
+                              {entry.latencyMs ? ` · ${entry.latencyMs}ms` : ""}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={conversationEndRef} />
+                </div>
               )}
-            </div>
-            {lastTranscript && (
-              <p className="text-xs text-muted-foreground">
-                You said: <span className="font-medium text-foreground">{lastTranscript}</span>
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Uses Cactus Whisper for transcription, then same Q&A pipeline with TTS response.
-            </p>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </section>
 
-        {/* Routing Status Panel */}
-        <Card>
-          <CardContent className="p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium">Routing Status</span>
-              {lastUpdate && (
-                <Badge
-                  data-testid="badge-route"
-                  variant={lastUpdate.routed === "local" ? "default" : "secondary"}
-                >
-                  {lastUpdate.routed === "local" ? (
-                    <><Cpu className="w-3 h-3 mr-1" /> LOCAL (Cactus)</>
-                  ) : (
-                    <><Cloud className="w-3 h-3 mr-1" /> CLOUD (Gemini)</>
-                  )}
-                </Badge>
+        {/* Routing Stats — Compact */}
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            { label: "Latency", value: `${latencyMs}ms`, icon: Zap },
+            { label: "Edge ratio", value: `${edgeRatio}%`, icon: Cpu },
+            { label: "Edge", value: String(localCount), icon: Cpu },
+            { label: "Cloud", value: String(cloudCount), icon: Cloud },
+          ].map(({ label, value, icon: Icon }) => (
+            <div key={label} className="bg-muted/50 rounded-lg px-2.5 py-2 text-center border">
+              <Icon className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-1" aria-hidden="true" />
+              <p className="text-sm font-semibold font-mono leading-none">{value}</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Last routing detail */}
+        {lastUpdate && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
+            <Badge
+              variant={lastUpdate.routed === "local" ? "default" : "secondary"}
+              className="text-[10px] h-5"
+            >
+              {lastUpdate.routed === "local" ? (
+                <><Cpu className="w-3 h-3 mr-1" />LOCAL</>
+              ) : (
+                <><Cloud className="w-3 h-3 mr-1" />CLOUD</>
               )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div>
-                <span className="text-muted-foreground">Reason: </span>
-                <span data-testid="text-reason" className="font-mono">
-                  {lastUpdate?.reason || "--"}
-                </span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Confidence: </span>
-                <span data-testid="text-confidence" className="font-mono">
-                  {lastUpdate?.confidence !== undefined ? lastUpdate.confidence.toFixed(2) : "--"}
-                </span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Latency: </span>
-                <span data-testid="text-latency" className="font-mono">{latencyMs}ms</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Edge Ratio: </span>
-                <span data-testid="text-edge-ratio" className="font-mono">{edgeRatio}%</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Edge calls: </span>
-                <span data-testid="text-local-count" className="font-mono">{localCount}</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Cloud calls: </span>
-                <span data-testid="text-cloud-count" className="font-mono">{cloudCount}</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Output Panel */}
-        <Card>
-          <CardContent className="p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <Eye className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm font-medium">Assistant Output</span>
-            </div>
-
-            <p data-testid="text-say" className="text-sm leading-relaxed">
-              {lastUpdate?.say || "Waiting for camera input..."}
-            </p>
-
-            {lastUpdate?.hazards && lastUpdate.hazards.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <AlertTriangle className="w-4 h-4 text-destructive" />
-                {lastUpdate.hazards.map((h: Hazard, i: number) => (
-                  <Badge
-                    key={`${h.label}-${i}`}
-                    data-testid={`badge-hazard-${i}`}
-                    variant={h.severity === "high" ? "destructive" : "secondary"}
-                  >
-                    {h.label.toUpperCase()} ({h.severity})
-                  </Badge>
-                ))}
-              </div>
+            </Badge>
+            <span className="font-mono">{lastUpdate.reason || "—"}</span>
+            {lastUpdate.confidence !== undefined && (
+              <span className="ml-auto font-mono">conf: {lastUpdate.confidence.toFixed(2)}</span>
             )}
-
-            <p className="text-xs text-muted-foreground">
-              Frames processed locally unless escalated to cloud.
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* Connection Fallback Banner */}
-        {connectionStatus === "fallback" && (
-          <div className="bg-muted border rounded-md p-3 text-sm flex items-center gap-2">
-            <Activity className="w-4 h-4 text-orange-500 dark:text-orange-400 flex-shrink-0" />
-            <span>WebSocket down -- using HTTP fallback</span>
           </div>
         )}
 
-        {/* Demo Script Panel */}
+        {/* Settings */}
+        <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <CollapsibleTrigger asChild>
+            <Button
+              variant="secondary"
+              className="w-full justify-between rounded-lg"
+              size="sm"
+            >
+              <span className="flex items-center gap-2">
+                <Settings2 className="w-4 h-4" />
+                Settings
+              </span>
+              <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${settingsOpen ? "rotate-180" : ""}`} />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2">
+            <Card>
+              <CardContent className="p-4 space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="cloud-toggle" className="text-sm flex items-center gap-2 cursor-pointer">
+                      {cloudEnabled ? <Cloud className="w-4 h-4 text-primary" /> : <CloudOff className="w-4 h-4 text-muted-foreground" />}
+                      <span>Cloud processing</span>
+                    </Label>
+                    <Switch
+                      id="cloud-toggle"
+                      checked={cloudEnabled}
+                      onCheckedChange={setCloudEnabled}
+                      aria-label="Toggle cloud processing"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="offline-toggle" className="text-sm flex items-center gap-2 cursor-pointer">
+                      <WifiOff className="w-4 h-4 text-muted-foreground" />
+                      <span>Simulate offline</span>
+                    </Label>
+                    <Switch
+                      id="offline-toggle"
+                      checked={offlineSimulated}
+                      onCheckedChange={setOfflineSimulated}
+                      aria-label="Simulate offline mode"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="hazard-toggle" className="text-sm flex items-center gap-2 cursor-pointer">
+                      <AlertTriangle className="w-4 h-4 text-amber-500" />
+                      <span>Test hazard</span>
+                    </Label>
+                    <Switch
+                      id="hazard-toggle"
+                      checked={testHazard}
+                      onCheckedChange={setTestHazard}
+                      aria-label="Toggle test hazard"
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </CollapsibleContent>
+        </Collapsible>
+
+        {/* Demo Script */}
         <Collapsible open={demoOpen} onOpenChange={setDemoOpen}>
           <CollapsibleTrigger asChild>
             <Button
-              data-testid="button-demo-script"
               variant="secondary"
-              className="w-full justify-between"
+              className="w-full justify-between rounded-lg"
               size="sm"
             >
               <span className="flex items-center gap-2">
                 <Zap className="w-4 h-4" />
                 Demo Script
               </span>
-              <ChevronDown className={`w-4 h-4 transition-transform ${demoOpen ? "rotate-180" : ""}`} />
+              <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${demoOpen ? "rotate-180" : ""}`} />
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2">
             <Card>
-              <CardContent className="p-4 space-y-3 text-sm">
-                <div className="space-y-1">
-                  <p className="font-medium">Step 1: Local-Only Mode</p>
-                  <p className="text-muted-foreground">
-                    Turn Cloud OFF + Offline ON. Start camera and streaming. See LOCAL hazard alerts with no cloud calls.
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="font-medium">Step 2: Cloud Escalation</p>
-                  <p className="text-muted-foreground">
-                    Turn Cloud ON + Offline OFF. Ask a complex question (e.g., "Is there a crosswalk ahead?"). See CLOUD route with reason.
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="font-medium">Step 3: Instant Hazard Alert</p>
-                  <p className="text-muted-foreground">
-                    Toggle Test Hazard ON. See instant LOCAL "Stop -- stairs ahead" with TTS. Always routes locally for safety.
-                  </p>
-                </div>
+              <CardContent className="p-4 space-y-4 text-sm">
+                {[
+                  {
+                    step: 1,
+                    title: "Local-Only Mode",
+                    desc: "Turn Cloud OFF + Offline ON. Start camera and streaming. See LOCAL hazard alerts with no cloud calls.",
+                  },
+                  {
+                    step: 2,
+                    title: "Cloud Escalation",
+                    desc: 'Turn Cloud ON + Offline OFF. Ask a complex question (e.g., "Is there a crosswalk ahead?"). See CLOUD route with reason.',
+                  },
+                  {
+                    step: 3,
+                    title: "Instant Hazard Alert",
+                    desc: 'Toggle Test Hazard ON. See instant LOCAL "Stop — stairs ahead" with TTS. Always routes locally for safety.',
+                  },
+                ].map(({ step, title, desc }) => (
+                  <div key={step} className="flex gap-3">
+                    <div className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center flex-shrink-0 mt-0.5">
+                      {step}
+                    </div>
+                    <div>
+                      <p className="font-medium">{title}</p>
+                      <p className="text-muted-foreground text-xs mt-0.5">{desc}</p>
+                    </div>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </CollapsibleContent>

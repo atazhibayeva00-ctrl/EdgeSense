@@ -35,7 +35,10 @@ WHISPER_MODEL_PATH = os.environ.get("WHISPER_MODEL_PATH", "weights/whisper-small
 WHISPER_PROMPT = "<|startoftranscript|><|en|><|transcribe|><|notimestamps|>"
 
 try:
-    from cactus import cactus_init, cactus_complete, cactus_destroy, cactus_transcribe
+    try:
+        from cactus import cactus_init, cactus_complete, cactus_destroy, cactus_transcribe
+    except (ImportError, ModuleNotFoundError):
+        from src.cactus import cactus_init, cactus_complete, cactus_destroy, cactus_transcribe
     model = cactus_init(MODEL_PATH)
     print(f"[cactus] VLM loaded: {MODEL_PATH}")
     whisper_model = cactus_init(WHISPER_MODEL_PATH)
