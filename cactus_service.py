@@ -116,28 +116,49 @@ def _tools_to_cactus(tools: list) -> list:
     return out
 
 
+def _is_readable(text: str) -> bool:
+    """Check if text looks like readable English (not raw tokens/numbers)."""
+    if not text or len(text) < 5:
+        return False
+    alpha_ratio = sum(c.isalpha() or c.isspace() for c in text) / len(text)
+    return alpha_ratio > 0.6
+
+
 def _parse_structured_response(response_text: str):
     """Parse VLM response into { confidence, hazards, tags, short }. Handles JSON or plain text."""
     text = (response_text or "").strip()
-    # Try JSON first (we prompt the VLM to return JSON)
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
     try:
-        # Strip markdown code block if present
-        if text.startswith("```"):
-            text = re.sub(r"^```\w*\n?", "", text)
-            text = re.sub(r"\n?```\s*$", "", text)
-        parsed = json.loads(text)
+        parsed = json.loads(text.replace("'", '"'))
+        short = (
+            parsed.get("short")
+            or parsed.get("description")
+            or parsed.get("response")
+            or parsed.get("text")
+            or parsed.get("summary")
+            or "Scene analyzed."
+        )
         confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
         hazards = parsed.get("hazards") or []
         tags = parsed.get("tags") or []
-        short = (parsed.get("short") or "Scene analyzed.")[:500]
-        return {"confidence": confidence, "hazards": hazards, "tags": tags, "short": short}
+        return {"confidence": confidence, "hazards": hazards, "tags": tags, "short": str(short)[:500]}
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
+    if _is_readable(text):
+        return {
+            "confidence": 0.4,
+            "hazards": [],
+            "tags": [],
+            "short": text[:300],
+        }
     return {
-        "confidence": 0.5,
+        "confidence": 0.1,
         "hazards": [],
         "tags": [],
-        "short": text[:300] if text else "Scene analyzed.",
+        "short": "Scene analyzed.",
+        "cloud_handoff": True,
     }
 
 
@@ -230,6 +251,8 @@ def infer():
         structured = _parse_structured_response(response_text)
         if confidence_sdk is not None:
             structured["confidence"] = max(0.0, min(1.0, float(confidence_sdk)))
+        if structured.pop("cloud_handoff", False):
+            cloud_handoff = True
 
     return jsonify({
         "response": json.dumps(structured),
