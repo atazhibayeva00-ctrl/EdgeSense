@@ -107,11 +107,7 @@ export async function runFunctionGemmaLocal(params: {
   return result;
 }
 
-/** Voice-to-action (Rubric 3): transcribe audio via Cactus Whisper. */
 export async function transcribeCactus(audioBase64: string, contentType = "audio/wav"): Promise<string> {
-  // #region agent log
-  fetch('http://127.0.0.1:7932/ingest/b15c28e1-3abe-49f5-af31-77027f271685',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2a1712'},body:JSON.stringify({sessionId:'2a1712',location:'cactus-adapter.ts:transcribeCactus',message:'Calling Cactus /transcribe',data:{endpoint:CACTUS_ENDPOINT,audioLen:audioBase64?.length,contentType},timestamp:Date.now(),hypothesisId:'H4,H5'})}).catch(()=>{});
-  // #endregion
   if (!CACTUS_ENDPOINT) {
     throw new Error("CACTUS_ENDPOINT_URL is not set. Run the Cactus Python service for voice.");
   }
