@@ -97,10 +97,13 @@ export default function EchoPathPage() {
   }, [conversation, scrollToBottom]);
 
   const addConversationEntry = useCallback((entry: Omit<ConversationEntry, "id" | "timestamp">) => {
-    setConversation((prev) => [
-      ...prev,
-      { ...entry, id: ++entryIdCounter, timestamp: Date.now() },
-    ]);
+    setConversation((prev) => {
+      const updated = [
+        ...prev,
+        { ...entry, id: ++entryIdCounter, timestamp: Date.now() },
+      ];
+      return updated.length > 20 ? updated.slice(-20) : updated;
+    });
   }, []);
 
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
