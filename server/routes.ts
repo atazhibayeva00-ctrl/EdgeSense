@@ -3,7 +3,7 @@ import { type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { runFunctionGemmaLocal, transcribeCactus } from "./cactus-adapter";
-import { callGeminiCloud } from "./gemini-cloud";
+import { callGeminiCloud, transcribeGemini } from "./gemini-cloud";
 import { routeDecision, shouldSpeak, isLocalResultValid } from "./router";
 import { log } from "./index";
 import type { UpdateMessage, SessionState } from "@shared/schema";
@@ -254,15 +254,32 @@ export async function registerRoutes(
       storage.updateSession(userId, session);
 
       let transcript: string;
+      let transcribeSource = "cactus";
       try {
         transcript = await transcribeCactus(audioBase64, contentType || "audio/wav");
-      } catch (err: any) {
-        log(`Transcribe failed: ${err.message}`, "cactus");
-        return res.status(502).json({
-          error: "Transcription unavailable",
-          transcript: "",
-          say: "I couldn't hear you. Please check the Cactus service and try again.",
-        });
+      } catch (cactusErr: any) {
+        log(`Cactus transcribe failed: ${cactusErr.message}, falling back to Gemini`, "cactus");
+        if (!session.cloudEnabled || session.offlineSimulated) {
+          log("Cloud disabled or offline — cannot use Gemini transcription fallback", "cactus");
+          return res.status(502).json({
+            error: "Transcription unavailable",
+            transcript: "",
+            transcribeSource: "none",
+            say: "Voice is unavailable in offline mode. Please type your question instead.",
+          });
+        }
+        try {
+          transcript = await transcribeGemini(audioBase64, contentType || "audio/webm");
+          transcribeSource = "gemini";
+        } catch (geminiErr: any) {
+          log(`Gemini transcribe also failed: ${geminiErr.message}`, "gemini");
+          return res.status(502).json({
+            error: "Transcription unavailable",
+            transcript: "",
+            transcribeSource: "none",
+            say: "I couldn't process your voice. Please try again.",
+          });
+        }
       }
 
       if (!transcript.trim()) {
@@ -276,6 +293,7 @@ export async function registerRoutes(
           say: "I didn't catch that. Try speaking again.",
           speak: true,
           transcript: "",
+          transcribeSource,
           debug: `edge=${session.stats.localCount} cloud=${session.stats.cloudCount}`,
         });
       }
@@ -286,7 +304,7 @@ export async function registerRoutes(
         ts: Date.now(),
       });
 
-      res.json({ ...result, transcript });
+      res.json({ ...result, transcript, transcribeSource });
     } catch (err: any) {
       log(`POST /api/voice error: ${err.message}`, "error");
       res.status(500).json({ error: err.message });
