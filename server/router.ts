@@ -87,28 +87,30 @@ export function shouldSpeak(params: {
 
   if (isQuestion) return true;
 
+  const hash = simpleHash(say);
+  const timeSinceLastSpoken = now - session.lastSpokenTs;
+
+  const isGenericLocal = say === "Scene analyzed." || say === "Local analysis unavailable.";
+  if (isGenericLocal) return false;
+
+  if (hash === session.lastSpokenHash) return false;
+
   const highSeverityHazards = hazards.filter(h => h.severity === "high");
   if (highSeverityHazards.length > 0) {
     const newHazardLabels = highSeverityHazards.map(h => h.label);
     const isNewHazard = newHazardLabels.some(l => !session.lastHazardLabels.includes(l));
-    const hazardCooldownOk = now - session.lastHazardTs > 3000;
+    const hazardCooldownOk = now - session.lastHazardTs > 8000;
 
-    if (isNewHazard || hazardCooldownOk) {
+    if (isNewHazard && hazardCooldownOk) {
       return true;
     }
   }
 
-  const hash = simpleHash(say);
-  const timeSinceLastSpoken = now - session.lastSpokenTs;
-  const isGenericLocal = say === "Scene analyzed." || say === "Local analysis unavailable.";
-
-  if (isGenericLocal) return false;
-
-  if (routed === "cloud" && timeSinceLastSpoken > 3000) {
+  if (routed === "cloud" && timeSinceLastSpoken > 10000) {
     return true;
   }
 
-  if (timeSinceLastSpoken > 4000 && hash !== session.lastSpokenHash) {
+  if (timeSinceLastSpoken > 15000) {
     return true;
   }
 
