@@ -5,40 +5,67 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 export async function callGeminiCloud(params: {
   question?: string;
   lastSceneSummary: string;
+  imageDataUrl?: string;
 }): Promise<string> {
   if (!GEMINI_API_KEY) {
-    return "Cloud analysis unavailable -- no API key configured. I might be wrong, but the path ahead looks generally clear based on local analysis.";
+    return "Cloud analysis unavailable -- no API key configured. Please proceed with caution.";
   }
 
-  const systemPrompt = `You are EdgeSense, a mobility safety assistant for visually impaired users. 
+  const systemPrompt = `You are EchoPath, a mobility safety assistant for visually impaired users. 
 Rules:
 - Keep responses to 1-2 sentences maximum
-- Never claim certainty about safety ("path is clear")
-- Always hedge with "I might be wrong" or "it appears"
-- Focus on actionable guidance
-- If hazards mentioned, prioritize warning about them`;
+- ONLY describe what you actually see in the image
+- If no image is provided, say you cannot analyze the scene
+- Never make up or hallucinate hazards that are not visible
+- Focus on actionable guidance based on what is actually visible
+- If you see hazards, warn about them specifically`;
 
-  const userContent = params.question
-    ? `Scene context: ${params.lastSceneSummary || "No scene data available."}\n\nUser question: ${params.question}`
-    : `Analyze this scene for a visually impaired user: ${params.lastSceneSummary}`;
+  const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
+
+  parts.push({ text: systemPrompt });
+
+  if (params.imageDataUrl && params.imageDataUrl.startsWith("data:image/")) {
+    const commaIdx = params.imageDataUrl.indexOf(",");
+    if (commaIdx > 0) {
+      const mimeMatch = params.imageDataUrl.match(/^data:(image\/[^;]+);/);
+      const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+      const base64Data = params.imageDataUrl.slice(commaIdx + 1);
+
+      parts.push({
+        inlineData: {
+          mimeType,
+          data: base64Data,
+        },
+      });
+    }
+  }
+
+  if (params.question) {
+    parts.push({
+      text: `User question: ${params.question}\nScene context: ${params.lastSceneSummary || "No prior scene data."}`,
+    });
+  } else {
+    parts.push({
+      text: "Describe what you see in this image for a visually impaired user. Focus on obstacles, hazards, or navigation-relevant details. Only describe what is actually visible.",
+    });
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
 
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [
-            { role: "user", parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }
+            { role: "user", parts }
           ],
           generationConfig: {
-            maxOutputTokens: 1024,
+            maxOutputTokens: 100,
             temperature: 0.3,
-            thinkingConfig: { thinkingBudget: 0 },
           },
         }),
         signal: controller.signal,
@@ -61,9 +88,9 @@ Rules:
     clearTimeout(timeout);
     if (err.name === "AbortError") {
       log("Gemini call timed out (5s)", "gemini");
-      return "Cloud analysis timed out. Based on local analysis, proceed with caution -- I might be wrong.";
+      return "Cloud analysis timed out. Please proceed with caution.";
     }
     log(`Gemini error: ${err.message}`, "gemini");
-    return "Cloud analysis failed. Based on local analysis, the area appears navigable but please proceed carefully.";
+    return "Cloud analysis failed. Please proceed carefully.";
   }
 }
