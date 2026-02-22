@@ -482,6 +482,7 @@ export default function EchoPathPage() {
         reader.readAsDataURL(blob);
       };
       mediaRecorderRef.current = recorder;
+      (recorder as any)._startTime = Date.now();
       recorder.start(250);
       setVoiceRecording(true);
     } catch (err: unknown) {
@@ -496,11 +497,20 @@ export default function EchoPathPage() {
 
   const stopVoiceRecording = useCallback(() => {
     if (mediaRecorderRef.current && voiceRecording) {
-      mediaRecorderRef.current.stop();
+      const recorder = mediaRecorderRef.current;
+      const elapsed = Date.now() - ((recorder as any)._startTime || 0);
+      if (elapsed < 800) {
+        addConversationEntry({ type: "assistant", text: "Hold the mic button a bit longer while speaking." });
+        try { recorder.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+        mediaRecorderRef.current = null;
+        setVoiceRecording(false);
+        return;
+      }
+      recorder.stop();
       mediaRecorderRef.current = null;
       setVoiceRecording(false);
     }
-  }, [voiceRecording]);
+  }, [voiceRecording, addConversationEntry]);
 
   const connectionColor = {
     connected: "bg-emerald-500",
