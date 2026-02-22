@@ -311,6 +311,97 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/tts", async (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text) return res.status(400).json({ error: "text required" });
+
+      const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+      if (!GEMINI_API_KEY) {
+        return res.status(503).json({ error: "No API key for TTS" });
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
+      const apiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: `Say in a calm, clear voice: ${text}` }] }],
+            generationConfig: {
+              responseModalities: ["AUDIO"],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: "Kore" },
+                },
+              },
+            },
+          }),
+          signal: controller.signal,
+        }
+      );
+
+      clearTimeout(timeout);
+
+      if (!apiRes.ok) {
+        const errText = await apiRes.text();
+        log(`TTS API error: ${apiRes.status} - ${errText.slice(0, 200)}`, "gemini");
+        return res.status(apiRes.status).json({ error: "TTS generation failed" });
+      }
+
+      const data = await apiRes.json();
+      const audioBase64 = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      const mimeType = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.mimeType || "audio/L16;rate=24000";
+
+      if (!audioBase64) {
+        log("TTS: no audio in response", "gemini");
+        return res.status(500).json({ error: "No audio generated" });
+      }
+
+      const audioBuffer = Buffer.from(audioBase64, "base64");
+
+      if (mimeType.includes("L16") || mimeType.includes("pcm")) {
+        const sampleRate = 24000;
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+        const blockAlign = numChannels * (bitsPerSample / 8);
+        const wavHeader = Buffer.alloc(44);
+        wavHeader.write("RIFF", 0);
+        wavHeader.writeUInt32LE(36 + audioBuffer.length, 4);
+        wavHeader.write("WAVE", 8);
+        wavHeader.write("fmt ", 12);
+        wavHeader.writeUInt32LE(16, 16);
+        wavHeader.writeUInt16LE(1, 20);
+        wavHeader.writeUInt16LE(numChannels, 22);
+        wavHeader.writeUInt32LE(sampleRate, 24);
+        wavHeader.writeUInt32LE(byteRate, 28);
+        wavHeader.writeUInt16LE(blockAlign, 32);
+        wavHeader.writeUInt16LE(bitsPerSample, 34);
+        wavHeader.write("data", 36);
+        wavHeader.writeUInt32LE(audioBuffer.length, 40);
+        const wavBuffer = Buffer.concat([wavHeader, audioBuffer]);
+        res.setHeader("Content-Type", "audio/wav");
+        res.setHeader("Content-Length", wavBuffer.length);
+        return res.send(wavBuffer);
+      }
+
+      res.setHeader("Content-Type", mimeType);
+      res.setHeader("Content-Length", audioBuffer.length);
+      res.send(audioBuffer);
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        log("TTS timed out", "gemini");
+        return res.status(504).json({ error: "TTS timed out" });
+      }
+      log(`TTS error: ${err.message}`, "error");
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/stats/:userId", (req, res) => {
     const session = storage.getSession(req.params.userId);
     const total = session.stats.localCount + session.stats.cloudCount;
