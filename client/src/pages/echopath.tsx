@@ -210,9 +210,11 @@ export default function EchoPathPage() {
     const t = l + c;
     setEdgeRatio(t > 0 ? Math.round((l / t) * 100) : 100);
 
-    if (update.say && update.say !== lastSayRef.current) {
+    const hasHazards = update.hazards && update.hazards.length > 0;
+    const isImportant = update.speak || hasHazards || update.reason === "user_question";
+
+    if (update.say && update.say !== lastSayRef.current && isImportant) {
       lastSayRef.current = update.say;
-      const hasHazards = update.hazards && update.hazards.length > 0;
       addConversationEntry({
         type: hasHazards ? "hazard" : "assistant",
         text: update.say,
