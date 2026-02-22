@@ -84,6 +84,7 @@ async function processFrame(params: {
     hazards: localResult.hazards,
     say: finalSay,
     isQuestion: false,
+    routed: decision.routed,
   });
 
   if (speak) {
@@ -253,6 +254,9 @@ export async function registerRoutes(
   app.post("/api/voice", async (req, res) => {
     try {
       const { userId, audioBase64, contentType, cloudEnabled, offlineSimulated } = req.body;
+      // #region agent log
+      fetch('http://127.0.0.1:7932/ingest/b15c28e1-3abe-49f5-af31-77027f271685',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2a1712'},body:JSON.stringify({sessionId:'2a1712',location:'routes.ts:voice:entry',message:'Voice endpoint hit',data:{hasUserId:!!userId,audioLen:audioBase64?.length||0,contentType,cloudEnabled,offlineSimulated},timestamp:Date.now(),hypothesisId:'H1,H4'})}).catch(()=>{});
+      // #endregion
       if (!userId || !audioBase64) {
         return res.status(400).json({ error: "userId and audioBase64 required" });
       }
@@ -265,7 +269,13 @@ export async function registerRoutes(
       let transcript: string;
       try {
         transcript = await transcribeCactus(audioBase64, contentType || "audio/wav");
+        // #region agent log
+        fetch('http://127.0.0.1:7932/ingest/b15c28e1-3abe-49f5-af31-77027f271685',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2a1712'},body:JSON.stringify({sessionId:'2a1712',location:'routes.ts:voice:transcript_ok',message:'Transcription succeeded',data:{transcript:transcript?.slice(0,100),len:transcript?.length},timestamp:Date.now(),hypothesisId:'H2,H3'})}).catch(()=>{});
+        // #endregion
       } catch (err: any) {
+        // #region agent log
+        fetch('http://127.0.0.1:7932/ingest/b15c28e1-3abe-49f5-af31-77027f271685',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2a1712'},body:JSON.stringify({sessionId:'2a1712',location:'routes.ts:voice:transcript_fail',message:'Transcription FAILED',data:{error:err.message?.slice(0,200)},timestamp:Date.now(),hypothesisId:'H2,H4'})}).catch(()=>{});
+        // #endregion
         log(`Transcribe failed: ${err.message}`, "cactus");
         return res.status(502).json({
           error: "Transcription unavailable",

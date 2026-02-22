@@ -423,7 +423,7 @@ export default function EchoPathPage() {
               <Shield className="w-3.5 h-3.5 text-white" aria-hidden="true" />
             </div>
             <div>
-              <h1 className="text-sm font-bold leading-none tracking-tight">EchoPath</h1>
+              <h1 className="text-sm font-bold leading-none tracking-tight">EdgeSense</h1>
               <p className="text-[10px] text-muted-foreground leading-none mt-0.5">AI Mobility Assistant</p>
             </div>
           </div>
@@ -459,7 +459,7 @@ export default function EchoPathPage() {
                 </div>
                 <div className="text-center">
                   <p className="text-sm font-semibold">Point your camera</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5 max-w-[200px]">EchoPath analyzes surroundings for hazards in real time</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5 max-w-[200px]">EdgeSense analyzes surroundings for hazards in real time</p>
                 </div>
                 <Button onClick={startCamera} className="gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md">
                   <Camera className="w-4 h-4" /> Start Camera

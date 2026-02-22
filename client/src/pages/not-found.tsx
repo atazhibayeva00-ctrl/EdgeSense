@@ -19,7 +19,7 @@ export default function NotFound() {
           </div>
           <Link href="/">
             <Button variant="default" className="mt-2">
-              Back to EchoPath
+              Back to EdgeSense
             </Button>
           </Link>
         </CardContent>

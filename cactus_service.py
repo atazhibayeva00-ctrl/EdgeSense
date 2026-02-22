@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EchoPath - Cactus local inference (official API)
+EdgeSense - Cactus local inference (official API)
 - VLM (e.g. LFM2-VL-450M) for /infer (vision)
 - Whisper for /transcribe (voice-to-action, Rubric 3)
 
@@ -279,6 +279,7 @@ def _audio_bytes_to_wav_path(raw: bytes, content_type: str) -> tuple[str, bool]:
         f_in.close()
         wav_path = f_in.name + ".wav"
         seg = AudioSegment.from_file(f_in.name, format=ext[1:])
+        seg = seg.set_channels(1).set_frame_rate(16000).set_sample_width(2)
         seg.export(wav_path, format="wav")
         try:
             os.unlink(f_in.name)
@@ -293,7 +294,13 @@ def _audio_bytes_to_wav_path(raw: bytes, content_type: str) -> tuple[str, bool]:
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
     """Voice-to-action: accept audio (base64), return transcript via cactus_transcribe."""
+    # #region agent log
+    _dbg = lambda msg, d={}: open("/Users/atazhibayeva/EdgeSense/.cursor/debug-2a1712.log","a").write(json.dumps({"sessionId":"2a1712","location":"cactus_service.py:transcribe","message":msg,"data":d,"timestamp":int(time.time()*1000),"hypothesisId":"H2"})+"\n")
+    # #endregion
     if whisper_model is None:
+        # #region agent log
+        _dbg("Whisper model NOT loaded")
+        # #endregion
         return jsonify({"error": "Whisper model not loaded"}), 503
 
     data = request.get_json() or {}
@@ -307,14 +314,28 @@ def transcribe():
     except Exception as e:
         return jsonify({"error": f"Invalid base64: {e}"}), 400
 
+    # #region agent log
+    _dbg("Audio received", {"raw_bytes": len(raw), "content_type": content_type})
+    # #endregion
+
     wav_path = None
     try:
         wav_path, _ = _audio_bytes_to_wav_path(raw, content_type)
+        # #region agent log
+        _wav_size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
+        _dbg("WAV conversion ok", {"wav_path": wav_path, "wav_bytes": _wav_size})
+        # #endregion
         response_str = cactus_transcribe(whisper_model, wav_path, prompt=WHISPER_PROMPT)
         result = json.loads(response_str)
         transcript = (result.get("response") or "").strip()
+        # #region agent log
+        _dbg("Transcription result", {"transcript": transcript[:100] if transcript else "", "len": len(transcript)})
+        # #endregion
         return jsonify({"transcript": transcript, "success": True})
     except Exception as e:
+        # #region agent log
+        _dbg("Transcribe EXCEPTION", {"error": str(e)[:200]})
+        # #endregion
         print(f"[cactus] transcribe error: {e}", file=sys.stderr)
         return jsonify({"error": str(e), "transcript": ""}), 200
     finally:
@@ -345,7 +366,7 @@ atexit.register(_destroy)
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
-    print(f"[cactus] EchoPath edge service on port {port} (model={MODEL_PATH})")
+    print(f"[cactus] EdgeSense edge service on port {port} (model={MODEL_PATH})")
     if model is None:
         print("[cactus] ERROR: Model not loaded. Check CACTUS_MODEL_PATH and cactus_init.", file=sys.stderr)
         sys.exit(1)
