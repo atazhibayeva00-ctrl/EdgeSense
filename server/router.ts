@@ -80,8 +80,9 @@ export function shouldSpeak(params: {
   hazards: Array<{ label: string; severity: string }>;
   say: string;
   isQuestion: boolean;
+  routed?: string;
 }): boolean {
-  const { session, hazards, say, isQuestion } = params;
+  const { session, hazards, say, isQuestion, routed } = params;
   const now = Date.now();
 
   if (isQuestion) return true;
@@ -99,6 +100,13 @@ export function shouldSpeak(params: {
 
   const hash = simpleHash(say);
   const timeSinceLastSpoken = now - session.lastSpokenTs;
+  const isGenericLocal = say === "Scene analyzed." || say === "Local analysis unavailable.";
+
+  if (isGenericLocal) return false;
+
+  if (routed === "cloud" && timeSinceLastSpoken > 3000) {
+    return true;
+  }
 
   if (timeSinceLastSpoken > 4000 && hash !== session.lastSpokenHash) {
     return true;

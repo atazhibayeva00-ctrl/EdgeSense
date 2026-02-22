@@ -14,7 +14,6 @@ import {
 import {
   Camera,
   CameraOff,
-  Wifi,
   WifiOff,
   Cloud,
   CloudOff,
@@ -26,7 +25,6 @@ import {
   ChevronDown,
   Cpu,
   Zap,
-  Radio,
   Eye,
   MessageSquare,
   TriangleAlert,
@@ -36,7 +34,6 @@ import {
   Settings2,
   Waves,
   CircleAlert,
-  History,
 } from "lucide-react";
 import type { UpdateMessage, Hazard } from "@shared/schema";
 
@@ -321,9 +318,7 @@ export default function EchoPathPage() {
 
   const sendQuestion = useCallback(async () => {
     if (!question.trim()) return;
-
     addConversationEntry({ type: "user", text: question.trim() });
-
     const msg = {
       type: "question" as const,
       userId: userIdRef.current,
@@ -338,21 +333,14 @@ export default function EchoPathPage() {
         const res = await fetch("/api/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...msg,
-            cloudEnabled,
-            offlineSimulated,
-          }),
+          body: JSON.stringify({ ...msg, cloudEnabled, offlineSimulated }),
         });
         const data = await res.json();
-        if (data.type === "update") {
-          handleUpdate(data);
-        }
+        if (data.type === "update") handleUpdate(data);
       } catch {
         addConversationEntry({ type: "assistant", text: "Sorry, I couldn't process your question. Please try again." });
       }
     }
-
     setQuestion("");
   }, [question, cloudEnabled, offlineSimulated, handleUpdate, addConversationEntry]);
 
@@ -363,9 +351,7 @@ export default function EchoPathPage() {
       const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
       const recorder = new MediaRecorder(stream);
       audioChunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size) audioChunksRef.current.push(e.data);
-      };
+      recorder.ondataavailable = (e) => { if (e.data.size) audioChunksRef.current.push(e.data); };
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(audioChunksRef.current, { type: mime });
@@ -373,21 +359,12 @@ export default function EchoPathPage() {
         reader.onload = () => {
           const dataUrl = reader.result as string;
           const base64 = dataUrl.split(",")[1] || "";
-          if (!base64) {
-            setVoiceLoading(false);
-            return;
-          }
+          if (!base64) { setVoiceLoading(false); return; }
           setVoiceLoading(true);
           fetch("/api/voice", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              userId: userIdRef.current,
-              audioBase64: base64,
-              contentType: mime,
-              cloudEnabled,
-              offlineSimulated,
-            }),
+            body: JSON.stringify({ userId: userIdRef.current, audioBase64: base64, contentType: mime, cloudEnabled, offlineSimulated }),
           })
             .then((r) => r.json())
             .then((data) => {
@@ -434,154 +411,92 @@ export default function EchoPathPage() {
     disconnected: "bg-zinc-400",
   }[connectionStatus];
 
-  const formatTime = (ts: number) => {
-    const d = new Date(ts);
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  };
+  const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="px-4 py-3">
-          <div className="flex items-center justify-between max-w-lg mx-auto">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                <Shield className="w-4.5 h-4.5 text-primary" aria-hidden="true" />
-              </div>
-              <div>
-                <h1 className="text-base font-semibold leading-tight">EchoPath</h1>
-                <p className="text-[11px] text-muted-foreground leading-tight">Mobility Assistant</p>
-              </div>
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900 flex flex-col">
+      {/* Compact Header */}
+      <header className="sticky top-0 z-50 border-b bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl">
+        <div className="px-4 py-2.5 max-w-lg mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-sm">
+              <Shield className="w-3.5 h-3.5 text-white" aria-hidden="true" />
             </div>
-            <div className="flex items-center gap-1.5">
-              <div className="flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1" role="status" aria-label={`Connection: ${connectionStatus}`}>
-                <span className={`w-2 h-2 rounded-full ${connectionColor} ${connectionStatus === "connecting" ? "animate-pulse" : ""}`} />
-                <span className="text-[11px] font-medium text-muted-foreground capitalize">{connectionStatus}</span>
-              </div>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-8 w-8"
-                onClick={() => setMuted(!muted)}
-                aria-label={muted ? "Unmute audio" : "Mute audio"}
-              >
-                {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-              </Button>
+            <div>
+              <h1 className="text-sm font-bold leading-none tracking-tight">EdgeSense</h1>
+              <p className="text-[10px] text-muted-foreground leading-none mt-0.5">AI Mobility Assistant</p>
             </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${connectionColor} ${connectionStatus === "connecting" ? "animate-pulse" : ""}`} />
+              <span className="text-[10px] font-medium text-muted-foreground capitalize">{connectionStatus}</span>
+            </div>
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setMuted(!muted)} aria-label={muted ? "Unmute" : "Mute"}>
+              {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            </Button>
           </div>
         </div>
-
-        {/* Connection warning banner */}
         {(connectionStatus === "disconnected" && cameraActive) && (
-          <div className="bg-destructive/10 border-t border-destructive/20 px-4 py-2" role="alert">
-            <div className="flex items-center gap-2 max-w-lg mx-auto">
-              <WifiOff className="w-3.5 h-3.5 text-destructive flex-shrink-0" />
-              <span className="text-xs text-destructive font-medium">Connection lost. Reconnecting...</span>
-            </div>
-          </div>
-        )}
-        {connectionStatus === "fallback" && (
-          <div className="bg-orange-500/10 border-t border-orange-500/20 px-4 py-2" role="alert">
-            <div className="flex items-center gap-2 max-w-lg mx-auto">
-              <Activity className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400 flex-shrink-0" />
-              <span className="text-xs text-orange-600 dark:text-orange-400 font-medium">WebSocket unavailable — using HTTP fallback</span>
+          <div className="bg-red-50 dark:bg-red-950/30 border-t border-red-200/50 px-4 py-1.5">
+            <div className="flex items-center gap-1.5 max-w-lg mx-auto">
+              <WifiOff className="w-3 h-3 text-red-500" />
+              <span className="text-[10px] text-red-600 dark:text-red-400 font-medium">Reconnecting...</span>
             </div>
           </div>
         )}
       </header>
 
-      <main className="flex-1 p-4 space-y-4 max-w-lg mx-auto w-full pb-8">
-        {/* Camera Section */}
-        <section aria-label="Camera preview">
-          <div className="relative rounded-xl overflow-hidden bg-muted aspect-video border">
-            <video
-              ref={videoRef}
-              className={`w-full h-full object-cover ${!cameraActive ? "hidden" : ""}`}
-              playsInline
-              muted
-              aria-label="Live camera feed"
-            />
+      <main className="flex-1 flex flex-col max-w-lg mx-auto w-full">
+        {/* Camera — compact */}
+        <section className="px-4 pt-3">
+          <div className="relative rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-800 aspect-[16/10] border border-slate-200 dark:border-slate-700 shadow-sm">
+            <video ref={videoRef} className={`w-full h-full object-cover ${!cameraActive ? "hidden" : ""}`} playsInline muted />
             {!cameraActive && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
-                <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
-                  <Camera className="w-8 h-8 text-primary" />
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 flex items-center justify-center">
+                  <Camera className="w-7 h-7 text-indigo-500" />
                 </div>
-                <div className="text-center space-y-1.5">
-                  <p className="text-sm font-medium text-foreground">Start your camera to begin</p>
-                  <p className="text-xs text-muted-foreground max-w-[240px]">
-                    EchoPath will analyze your surroundings and alert you to hazards in real time.
-                  </p>
+                <div className="text-center">
+                  <p className="text-sm font-semibold">Point your camera</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5 max-w-[200px]">EdgeSense analyzes surroundings for hazards in real time</p>
                 </div>
-                <Button onClick={startCamera} size="lg" className="mt-1 gap-2 rounded-xl">
-                  <Camera className="w-4 h-4" />
-                  Enable Camera
+                <Button onClick={startCamera} className="gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md">
+                  <Camera className="w-4 h-4" /> Start Camera
                 </Button>
                 {cameraError && (
-                  <div className="flex items-start gap-2 bg-destructive/10 text-destructive text-xs rounded-lg px-3 py-2 max-w-[300px]" role="alert">
-                    <CircleAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                    <span>{cameraError}</span>
+                  <div className="flex items-start gap-1.5 bg-red-50 dark:bg-red-950/30 text-red-600 text-[11px] rounded-lg px-2.5 py-1.5 max-w-[260px]" role="alert">
+                    <CircleAlert className="w-3 h-3 mt-0.5 flex-shrink-0" /><span>{cameraError}</span>
                   </div>
                 )}
               </div>
             )}
             <canvas ref={canvasRef} className="hidden" />
-
-            {/* Overlay controls when camera is active */}
             {cameraActive && (
               <>
-                {/* Live indicator */}
                 {streaming && (
-                  <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-red-600/90 text-white px-2.5 py-1 rounded-full text-[11px] font-semibold tracking-wide shadow-lg">
-                    <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
-                    LIVE · {fps} FPS
+                  <div className="absolute top-2.5 left-2.5 flex items-center gap-1 bg-red-600 text-white px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider shadow-lg">
+                    <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" /> LIVE
                   </div>
                 )}
-
-                {/* Analyzing indicator */}
                 {isAnalyzing && (
-                  <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-primary/90 text-primary-foreground px-2.5 py-1 rounded-full text-[11px] font-medium shadow-lg">
-                    <Waves className="w-3 h-3 animate-pulse" />
-                    Analyzing...
+                  <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-indigo-600/90 text-white px-2 py-0.5 rounded-full text-[10px] font-medium shadow-lg">
+                    <Waves className="w-3 h-3 animate-pulse" /> Analyzing
                   </div>
                 )}
-
-                {/* Bottom overlay controls */}
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 via-black/30 to-transparent px-3 pt-8 pb-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <Button
-                      onClick={stopCamera}
-                      variant="destructive"
-                      size="sm"
-                      className="rounded-full gap-1.5 shadow-lg h-8 text-xs"
-                    >
-                      <CameraOff className="w-3.5 h-3.5" />
-                      Stop
+                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-3 pt-6 pb-2.5">
+                  <div className="flex items-center justify-between">
+                    <Button onClick={stopCamera} variant="destructive" size="sm" className="rounded-full h-7 text-[11px] gap-1 px-3">
+                      <CameraOff className="w-3 h-3" /> Stop
                     </Button>
-
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm rounded-full px-2.5 py-1">
-                        <label htmlFor="stream-toggle" className="text-[11px] text-white/80 font-medium cursor-pointer">Stream</label>
-                        <Switch
-                          id="stream-toggle"
-                          checked={streaming}
-                          onCheckedChange={setStreaming}
-                          className="scale-75"
-                          aria-label="Toggle frame streaming"
-                        />
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1 bg-white/15 backdrop-blur rounded-full px-2 py-0.5">
+                        <span className="text-[10px] text-white/80 font-medium">Stream</span>
+                        <Switch checked={streaming} onCheckedChange={setStreaming} className="scale-[0.6]" />
                       </div>
-
-                      <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm rounded-full px-2.5 py-1">
-                        <span className="text-[11px] text-white/80 font-medium">{fps} FPS</span>
-                        <Slider
-                          className="w-14"
-                          min={0.2}
-                          max={1}
-                          step={0.2}
-                          value={[fps]}
-                          onValueChange={([v]) => setFps(v)}
-                          aria-label="Frames per second"
-                        />
+                      <div className="flex items-center gap-1 bg-white/15 backdrop-blur rounded-full px-2 py-0.5">
+                        <span className="text-[10px] text-white/80 font-medium">{fps}fps</span>
+                        <Slider className="w-10" min={0.2} max={1} step={0.2} value={[fps]} onValueChange={([v]) => setFps(v)} />
                       </div>
                     </div>
                   </div>
@@ -591,340 +506,208 @@ export default function EchoPathPage() {
           </div>
         </section>
 
-        {/* Mode Selector */}
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant={mode === "hazard" ? "default" : "secondary"}
-            onClick={() => setMode("hazard")}
-            className="flex-1 gap-1.5 rounded-lg h-9"
-            aria-pressed={mode === "hazard"}
-          >
-            <TriangleAlert className="w-3.5 h-3.5" />
-            Hazard Detection
-          </Button>
-          <Button
-            size="sm"
-            variant={mode === "qa" ? "default" : "secondary"}
-            onClick={() => setMode("qa")}
-            className="flex-1 gap-1.5 rounded-lg h-9"
-            aria-pressed={mode === "qa"}
-          >
-            <MessageSquare className="w-3.5 h-3.5" />
-            Q&A Mode
-          </Button>
-        </div>
-
-        {/* Voice Input — Large, Prominent */}
-        <Card className="border-2 border-dashed border-primary/20 bg-primary/[0.02]">
-          <CardContent className="p-5 flex flex-col items-center gap-3">
-            {!voiceRecording ? (
-              <button
-                onClick={voiceLoading ? undefined : startVoiceRecording}
-                disabled={voiceLoading}
-                className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-200 shadow-lg ${
-                  voiceLoading
-                    ? "bg-muted text-muted-foreground cursor-wait"
-                    : "bg-primary text-primary-foreground hover:bg-primary/90 hover:scale-105 active:scale-95 cursor-pointer"
-                }`}
-                aria-label={voiceLoading ? "Processing voice input" : "Tap to start voice recording"}
-              >
-                {voiceLoading ? (
-                  <Waves className="w-8 h-8 animate-pulse" />
-                ) : (
-                  <Mic className="w-8 h-8" />
-                )}
-              </button>
-            ) : (
-              <button
-                onClick={stopVoiceRecording}
-                className="w-20 h-20 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center transition-all duration-200 shadow-lg hover:scale-105 active:scale-95 cursor-pointer animate-pulse"
-                aria-label="Tap to stop recording"
-              >
-                <Square className="w-7 h-7" />
-              </button>
-            )}
-            <div className="text-center">
-              <p className="text-sm font-medium">
-                {voiceRecording ? "Listening... Tap to stop" : voiceLoading ? "Processing your voice..." : "Tap to talk"}
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Voice powered by Cactus Whisper
-              </p>
-            </div>
-            {lastTranscript && (
-              <div className="w-full bg-muted/50 rounded-lg px-3 py-2 text-center">
-                <p className="text-xs text-muted-foreground">You said:</p>
-                <p className="text-sm font-medium">{lastTranscript}</p>
-              </div>
-            )}
-            {micError && (
-              <div className="flex items-start gap-2 bg-destructive/10 text-destructive text-xs rounded-lg px-3 py-2" role="alert">
-                <CircleAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                <span>{micError}</span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Text Input */}
-        <div className="flex items-center gap-2">
-          <Input
-            placeholder="Type a question about your surroundings..."
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendQuestion()}
-            className="rounded-lg h-10"
-            aria-label="Type your question"
-          />
-          <Button
-            size="icon"
-            onClick={sendQuestion}
-            disabled={!question.trim()}
-            className="rounded-lg h-10 w-10 flex-shrink-0"
-            aria-label="Send question"
-          >
-            <Send className="w-4 h-4" />
-          </Button>
-        </div>
-
-        {/* Conversation History */}
-        <section aria-label="Conversation history" aria-live="polite">
-          <div className="flex items-center gap-2 mb-2">
-            <History className="w-4 h-4 text-muted-foreground" />
-            <h2 className="text-sm font-medium">Conversation</h2>
-            {conversation.length > 0 && (
-              <Badge variant="secondary" className="text-[10px] h-5">
-                {conversation.length}
-              </Badge>
-            )}
+        {/* Mode + Stats bar */}
+        <div className="px-4 pt-3 flex items-center gap-2">
+          <div className="flex gap-1 flex-1">
+            <button
+              onClick={() => setMode("hazard")}
+              className={`flex-1 flex items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] font-semibold transition-all ${mode === "hazard" ? "bg-indigo-500 text-white shadow-sm" : "bg-muted/60 text-muted-foreground hover:bg-muted"}`}
+            >
+              <TriangleAlert className="w-3 h-3" /> Hazard
+            </button>
+            <button
+              onClick={() => setMode("qa")}
+              className={`flex-1 flex items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] font-semibold transition-all ${mode === "qa" ? "bg-indigo-500 text-white shadow-sm" : "bg-muted/60 text-muted-foreground hover:bg-muted"}`}
+            >
+              <MessageSquare className="w-3 h-3" /> Q&A
+            </button>
           </div>
+          <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground bg-muted/40 rounded-lg px-2.5 py-1.5">
+            <span className="flex items-center gap-0.5"><Cpu className="w-3 h-3" />{edgeRatio}%</span>
+            <span className="text-muted-foreground/30">|</span>
+            <span className="flex items-center gap-0.5"><Zap className="w-3 h-3" />{latencyMs}ms</span>
+          </div>
+        </div>
 
-          <Card>
-            <CardContent className="p-3">
+        {/* Conversation — main scrollable area */}
+        <section className="flex-1 px-4 pt-3 pb-2 min-h-0" aria-label="Conversation" aria-live="polite">
+          <div className="h-full flex flex-col">
+            <div className="flex-1 overflow-y-auto space-y-2.5 min-h-[200px] max-h-[40vh]">
               {conversation.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-6 text-center">
-                  <Eye className="w-6 h-6 text-muted-foreground/50" />
-                  <p className="text-sm text-muted-foreground">
-                    {cameraActive ? "Waiting for analysis results..." : "Start the camera or ask a question to begin"}
+                <div className="flex flex-col items-center justify-center py-10 text-center opacity-50">
+                  <Eye className="w-8 h-8 text-muted-foreground/40 mb-2" />
+                  <p className="text-xs text-muted-foreground">
+                    {cameraActive ? "Waiting for analysis..." : "Start the camera or ask a question"}
                   </p>
                 </div>
               ) : (
-                <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
-                  {conversation.map((entry) => (
-                    <div key={entry.id} className={`flex gap-2.5 animate-slide-in-up ${entry.type === "user" ? "flex-row-reverse" : ""}`}>
-                      {/* Avatar */}
-                      <div
-                        className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
-                          entry.type === "user"
-                            ? "bg-primary/10"
-                            : entry.type === "hazard"
-                            ? "bg-destructive/10"
-                            : "bg-muted"
-                        }`}
-                      >
-                        {entry.type === "user" ? (
-                          <MessageSquare className="w-3.5 h-3.5 text-primary" />
-                        ) : entry.type === "hazard" ? (
-                          <AlertTriangle className="w-3.5 h-3.5 text-destructive" />
-                        ) : (
-                          <Eye className="w-3.5 h-3.5 text-muted-foreground" />
+                conversation.map((entry) => (
+                  <div key={entry.id} className={`flex gap-2 animate-slide-in-up ${entry.type === "user" ? "flex-row-reverse" : ""}`}>
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                      entry.type === "user" ? "bg-indigo-100 dark:bg-indigo-900/30"
+                        : entry.type === "hazard" ? "bg-red-100 dark:bg-red-900/30"
+                        : "bg-slate-100 dark:bg-slate-800"
+                    }`}>
+                      {entry.type === "user" ? <MessageSquare className="w-3 h-3 text-indigo-500" />
+                        : entry.type === "hazard" ? <AlertTriangle className="w-3 h-3 text-red-500" />
+                        : <Eye className="w-3 h-3 text-slate-400" />}
+                    </div>
+                    <div className={`flex-1 min-w-0 ${entry.type === "user" ? "text-right" : ""}`}>
+                      <div className={`inline-block rounded-2xl px-3 py-2 text-[13px] leading-relaxed max-w-[85%] ${
+                        entry.type === "user"
+                          ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-br-md"
+                          : entry.type === "hazard"
+                          ? "bg-red-50 dark:bg-red-950/20 text-foreground border border-red-200 dark:border-red-800/30 rounded-bl-md"
+                          : "bg-white dark:bg-slate-800 text-foreground border border-slate-200 dark:border-slate-700 rounded-bl-md shadow-sm"
+                      }`}>
+                        <p className="break-words">{entry.text}</p>
+                        {entry.hazards && entry.hazards.length > 0 && (
+                          <div className="flex items-center gap-1 flex-wrap mt-1.5">
+                            {entry.hazards.map((h: Hazard, i: number) => (
+                              <Badge key={`${h.label}-${i}`} variant={h.severity === "high" ? "destructive" : "secondary"} className="text-[9px] h-4">
+                                {h.label.toUpperCase()}
+                              </Badge>
+                            ))}
+                          </div>
                         )}
                       </div>
-
-                      {/* Bubble */}
-                      <div className={`flex-1 min-w-0 ${entry.type === "user" ? "text-right" : ""}`}>
-                        <div
-                          className={`inline-block rounded-xl px-3 py-2 text-sm leading-relaxed max-w-full ${
-                            entry.type === "user"
-                              ? "bg-primary text-primary-foreground rounded-br-sm"
-                              : entry.type === "hazard"
-                              ? "bg-destructive/10 text-foreground border border-destructive/20 rounded-bl-sm"
-                              : "bg-muted text-foreground rounded-bl-sm"
-                          }`}
-                        >
-                          <p className="break-words">{entry.text}</p>
-                          {entry.hazards && entry.hazards.length > 0 && (
-                            <div className="flex items-center gap-1.5 flex-wrap mt-2">
-                              {entry.hazards.map((h: Hazard, i: number) => (
-                                <Badge
-                                  key={`${h.label}-${i}`}
-                                  variant={h.severity === "high" ? "destructive" : "secondary"}
-                                  className="text-[10px]"
-                                >
-                                  {h.label.toUpperCase()}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-1">
-                          <span className="text-[10px] text-muted-foreground">{formatTime(entry.timestamp)}</span>
-                          {entry.routed && (
-                            <Badge variant="outline" className="text-[9px] h-4 px-1.5 font-normal">
-                              {entry.routed === "local" ? "Edge" : "Cloud"}
-                              {entry.latencyMs ? ` · ${entry.latencyMs}ms` : ""}
-                            </Badge>
-                          )}
-                        </div>
+                      <div className={`flex items-center gap-1 mt-0.5 ${entry.type === "user" ? "justify-end" : ""}`}>
+                        <span className="text-[9px] text-muted-foreground/60">{formatTime(entry.timestamp)}</span>
+                        {entry.routed && (
+                          <span className={`text-[9px] font-medium ${entry.routed === "local" ? "text-emerald-500" : "text-indigo-400"}`}>
+                            {entry.routed === "local" ? "Edge" : "Cloud"}
+                            {entry.latencyMs ? ` · ${entry.latencyMs}ms` : ""}
+                          </span>
+                        )}
                       </div>
                     </div>
-                  ))}
-                  <div ref={conversationEndRef} />
-                </div>
+                  </div>
+                ))
               )}
-            </CardContent>
-          </Card>
+              <div ref={conversationEndRef} />
+            </div>
+          </div>
         </section>
 
-        {/* Routing Stats — Compact */}
-        <div className="grid grid-cols-4 gap-2">
-          {[
-            { label: "Latency", value: `${latencyMs}ms`, icon: Zap },
-            { label: "Edge ratio", value: `${edgeRatio}%`, icon: Cpu },
-            { label: "Edge", value: String(localCount), icon: Cpu },
-            { label: "Cloud", value: String(cloudCount), icon: Cloud },
-          ].map(({ label, value, icon: Icon }) => (
-            <div key={label} className="bg-muted/50 rounded-lg px-2.5 py-2 text-center border">
-              <Icon className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-1" aria-hidden="true" />
-              <p className="text-sm font-semibold font-mono leading-none">{value}</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
+        {/* Input bar — voice + text */}
+        <div className="sticky bottom-0 bg-white/90 dark:bg-slate-950/90 backdrop-blur-xl border-t px-4 py-3">
+          <div className="max-w-lg mx-auto space-y-2">
+            {micError && (
+              <div className="flex items-center gap-1.5 text-red-500 text-[11px]"><CircleAlert className="w-3 h-3" />{micError}</div>
+            )}
+            {lastTranscript && (
+              <div className="text-[11px] text-muted-foreground truncate"><span className="font-medium">You said:</span> {lastTranscript}</div>
+            )}
+            <div className="flex items-center gap-2">
+              {/* Voice button */}
+              {!voiceRecording ? (
+                <button
+                  onClick={voiceLoading ? undefined : startVoiceRecording}
+                  disabled={voiceLoading}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-all ${
+                    voiceLoading ? "bg-muted text-muted-foreground" : "bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-md hover:shadow-lg hover:scale-105 active:scale-95"
+                  }`}
+                  aria-label="Tap to talk"
+                >
+                  {voiceLoading ? <Waves className="w-4 h-4 animate-pulse" /> : <Mic className="w-4 h-4" />}
+                </button>
+              ) : (
+                <button
+                  onClick={stopVoiceRecording}
+                  className="w-10 h-10 rounded-full bg-red-500 text-white flex items-center justify-center flex-shrink-0 shadow-md animate-pulse hover:scale-105 active:scale-95"
+                  aria-label="Stop recording"
+                >
+                  <Square className="w-4 h-4" />
+                </button>
+              )}
+              {/* Text input */}
+              <div className="flex-1 flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 rounded-full pl-4 pr-1.5 py-1">
+                <Input
+                  placeholder={voiceRecording ? "Listening..." : "Ask about your surroundings..."}
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && sendQuestion()}
+                  className="border-0 bg-transparent h-8 text-sm focus-visible:ring-0 shadow-none px-0"
+                  disabled={voiceRecording}
+                />
+                <Button
+                  size="icon"
+                  onClick={sendQuestion}
+                  disabled={!question.trim()}
+                  className="rounded-full h-7 w-7 flex-shrink-0 bg-indigo-500 hover:bg-indigo-600"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                </Button>
+              </div>
             </div>
-          ))}
+          </div>
         </div>
 
-        {/* Last routing detail */}
-        {lastUpdate && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
-            <Badge
-              variant={lastUpdate.routed === "local" ? "default" : "secondary"}
-              className="text-[10px] h-5"
-            >
-              {lastUpdate.routed === "local" ? (
-                <><Cpu className="w-3 h-3 mr-1" />LOCAL</>
-              ) : (
-                <><Cloud className="w-3 h-3 mr-1" />CLOUD</>
-              )}
-            </Badge>
-            <span className="font-mono">{lastUpdate.reason || "—"}</span>
-            {lastUpdate.confidence !== undefined && (
-              <span className="ml-auto font-mono">conf: {lastUpdate.confidence.toFixed(2)}</span>
-            )}
-          </div>
-        )}
-
-        {/* Settings */}
-        <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
-          <CollapsibleTrigger asChild>
-            <Button
-              variant="secondary"
-              className="w-full justify-between rounded-lg"
-              size="sm"
-            >
-              <span className="flex items-center gap-2">
-                <Settings2 className="w-4 h-4" />
-                Settings
-              </span>
-              <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${settingsOpen ? "rotate-180" : ""}`} />
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="mt-2">
-            <Card>
-              <CardContent className="p-4 space-y-4">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <Label htmlFor="cloud-toggle" className="text-sm flex items-center gap-2 cursor-pointer">
-                      {cloudEnabled ? <Cloud className="w-4 h-4 text-primary" /> : <CloudOff className="w-4 h-4 text-muted-foreground" />}
-                      <span>Cloud processing</span>
-                    </Label>
-                    <Switch
-                      id="cloud-toggle"
-                      checked={cloudEnabled}
-                      onCheckedChange={setCloudEnabled}
-                      aria-label="Toggle cloud processing"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <Label htmlFor="offline-toggle" className="text-sm flex items-center gap-2 cursor-pointer">
-                      <WifiOff className="w-4 h-4 text-muted-foreground" />
-                      <span>Simulate offline</span>
-                    </Label>
-                    <Switch
-                      id="offline-toggle"
-                      checked={offlineSimulated}
-                      onCheckedChange={setOfflineSimulated}
-                      aria-label="Simulate offline mode"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <Label htmlFor="hazard-toggle" className="text-sm flex items-center gap-2 cursor-pointer">
-                      <AlertTriangle className="w-4 h-4 text-amber-500" />
-                      <span>Test hazard</span>
-                    </Label>
-                    <Switch
-                      id="hazard-toggle"
-                      checked={testHazard}
-                      onCheckedChange={setTestHazard}
-                      aria-label="Toggle test hazard"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </CollapsibleContent>
-        </Collapsible>
-
-        {/* Demo Script */}
-        <Collapsible open={demoOpen} onOpenChange={setDemoOpen}>
-          <CollapsibleTrigger asChild>
-            <Button
-              variant="secondary"
-              className="w-full justify-between rounded-lg"
-              size="sm"
-            >
-              <span className="flex items-center gap-2">
-                <Zap className="w-4 h-4" />
-                Demo Script
-              </span>
-              <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${demoOpen ? "rotate-180" : ""}`} />
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="mt-2">
-            <Card>
-              <CardContent className="p-4 space-y-4 text-sm">
-                {[
-                  {
-                    step: 1,
-                    title: "Local-Only Mode",
-                    desc: "Turn Cloud OFF + Offline ON. Start camera and streaming. See LOCAL hazard alerts with no cloud calls.",
-                  },
-                  {
-                    step: 2,
-                    title: "Cloud Escalation",
-                    desc: 'Turn Cloud ON + Offline OFF. Ask a complex question (e.g., "Is there a crosswalk ahead?"). See CLOUD route with reason.',
-                  },
-                  {
-                    step: 3,
-                    title: "Instant Hazard Alert",
-                    desc: 'Toggle Test Hazard ON. See instant LOCAL "Stop — stairs ahead" with TTS. Always routes locally for safety.',
-                  },
-                ].map(({ step, title, desc }) => (
-                  <div key={step} className="flex gap-3">
-                    <div className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center flex-shrink-0 mt-0.5">
-                      {step}
+        {/* Collapsible Settings & Demo */}
+        <div className="px-4 pb-4 space-y-2">
+          <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="w-full justify-between h-8 text-[11px] text-muted-foreground hover:text-foreground" size="sm">
+                <span className="flex items-center gap-1.5"><Settings2 className="w-3.5 h-3.5" />Settings</span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${settingsOpen ? "rotate-180" : ""}`} />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-1">
+              <Card className="border-dashed">
+                <CardContent className="p-3 space-y-2.5">
+                  {[
+                    { id: "cloud", label: "Cloud processing", icon: cloudEnabled ? Cloud : CloudOff, checked: cloudEnabled, onChange: setCloudEnabled },
+                    { id: "offline", label: "Simulate offline", icon: WifiOff, checked: offlineSimulated, onChange: setOfflineSimulated },
+                    { id: "hazard", label: "Test hazard", icon: AlertTriangle, checked: testHazard, onChange: setTestHazard },
+                  ].map(({ id, label, icon: Icon, checked, onChange }) => (
+                    <div key={id} className="flex items-center justify-between">
+                      <Label htmlFor={`${id}-toggle`} className="text-xs flex items-center gap-1.5 cursor-pointer">
+                        <Icon className="w-3.5 h-3.5 text-muted-foreground" />{label}
+                      </Label>
+                      <Switch id={`${id}-toggle`} checked={checked} onCheckedChange={onChange} className="scale-90" />
                     </div>
-                    <div>
-                      <p className="font-medium">{title}</p>
-                      <p className="text-muted-foreground text-xs mt-0.5">{desc}</p>
+                  ))}
+                </CardContent>
+              </Card>
+            </CollapsibleContent>
+          </Collapsible>
+
+          <Collapsible open={demoOpen} onOpenChange={setDemoOpen}>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="w-full justify-between h-8 text-[11px] text-muted-foreground hover:text-foreground" size="sm">
+                <span className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5" />Demo Script</span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${demoOpen ? "rotate-180" : ""}`} />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-1">
+              <Card className="border-dashed">
+                <CardContent className="p-3 space-y-2">
+                  {[
+                    { n: 1, t: "Local-Only Mode", d: "Cloud OFF + Offline ON. Stream camera. All local, no cloud calls." },
+                    { n: 2, t: "Cloud Escalation", d: "Cloud ON. Ask \"Is there a crosswalk ahead?\" See cloud routing." },
+                    { n: 3, t: "Hazard Alert", d: "Toggle Test Hazard. Instant local alert with TTS." },
+                  ].map(({ n, t, d }) => (
+                    <div key={n} className="flex gap-2">
+                      <div className="w-5 h-5 rounded-full bg-indigo-50 dark:bg-indigo-950/30 text-indigo-500 text-[10px] font-bold flex items-center justify-center flex-shrink-0">{n}</div>
+                      <div><p className="text-xs font-medium">{t}</p><p className="text-[10px] text-muted-foreground">{d}</p></div>
                     </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          </CollapsibleContent>
-        </Collapsible>
+                  ))}
+                </CardContent>
+              </Card>
+            </CollapsibleContent>
+          </Collapsible>
+
+          {/* Routing detail footer */}
+          {lastUpdate && (
+            <div className="flex items-center justify-center gap-2 text-[10px] text-muted-foreground pt-1">
+              <Badge variant={lastUpdate.routed === "local" ? "default" : "secondary"} className="text-[9px] h-4 px-1.5">
+                {lastUpdate.routed === "local" ? <><Cpu className="w-2.5 h-2.5 mr-0.5" />Edge</> : <><Cloud className="w-2.5 h-2.5 mr-0.5" />Cloud</>}
+              </Badge>
+              <span className="font-mono">{lastUpdate.reason}</span>
+              <span className="font-mono">E:{localCount} C:{cloudCount}</span>
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );
