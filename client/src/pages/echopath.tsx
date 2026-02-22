@@ -428,33 +428,51 @@ export default function EchoPathPage() {
     setMicError("");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
-      const recorder = new MediaRecorder(stream);
+      const supportedMime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+      const recorderOptions: MediaRecorderOptions = supportedMime ? { mimeType: supportedMime } : {};
+      const recorder = new MediaRecorder(stream, recorderOptions);
+      const actualMime = recorder.mimeType || supportedMime || "audio/webm";
       audioChunksRef.current = [];
       recorder.ondataavailable = (e) => { if (e.data.size) audioChunksRef.current.push(e.data); };
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: mime });
+        if (audioChunksRef.current.length === 0) {
+          setVoiceLoading(false);
+          return;
+        }
+        const blob = new Blob(audioChunksRef.current, { type: actualMime });
+        if (blob.size < 100) {
+          setVoiceLoading(false);
+          addConversationEntry({ type: "assistant", text: "Recording was too short. Hold the button and speak clearly." });
+          return;
+        }
+        setVoiceLoading(true);
         const reader = new FileReader();
         reader.onload = () => {
           const dataUrl = reader.result as string;
           const base64 = dataUrl.split(",")[1] || "";
           if (!base64) { setVoiceLoading(false); return; }
-          setVoiceLoading(true);
           fetch("/api/voice", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId: userIdRef.current, audioBase64: base64, contentType: mime, cloudEnabled, offlineSimulated }),
+            body: JSON.stringify({ userId: userIdRef.current, audioBase64: base64, contentType: actualMime, cloudEnabled, offlineSimulated }),
           })
-            .then((r) => r.json())
-            .then((data) => {
+            .then(async (r) => {
+              const data = await r.json();
               setVoiceLoading(false);
-              if (data.transcript !== undefined) {
+              if (data.say) {
+                addConversationEntry({ type: "assistant", text: data.say });
+                speak(data.say);
+              }
+              if (data.transcript) {
                 setLastTranscript(data.transcript);
                 addConversationEntry({ type: "user", text: data.transcript });
               }
               if (data.type === "update") handleUpdate(data);
-              if (data.speak && data.say) speak(data.say);
             })
             .catch(() => {
               setVoiceLoading(false);
@@ -464,7 +482,7 @@ export default function EchoPathPage() {
         reader.readAsDataURL(blob);
       };
       mediaRecorderRef.current = recorder;
-      recorder.start(200);
+      recorder.start(250);
       setVoiceRecording(true);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown error";

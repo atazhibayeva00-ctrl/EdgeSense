@@ -7,25 +7,30 @@ export async function transcribeGemini(audioBase64: string, contentType: string)
     throw new Error("No Gemini API key for transcription fallback");
   }
 
-  const mimeType = contentType.split(";")[0].trim() || "audio/webm";
+  let mimeType = contentType.split(";")[0].trim() || "audio/webm";
+  if (mimeType === "audio/webm") {
+    mimeType = "audio/webm";
+  }
+
+  log(`Gemini transcribe: mimeType=${mimeType}, audioSize=${audioBase64.length} chars`, "gemini");
 
   const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
-    { text: "Transcribe this audio exactly. Return ONLY the spoken words, nothing else. If no speech is detected, return an empty string." },
+    { text: "Transcribe the speech in this audio recording. Return ONLY the exact words spoken by the user, with no extra commentary, labels, or formatting. If you cannot detect any speech, return exactly: [NO_SPEECH]" },
     { inlineData: { mimeType, data: audioBase64 } },
   ];
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 20000);
 
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { maxOutputTokens: 200, temperature: 0.1 },
+          generationConfig: { maxOutputTokens: 500, temperature: 0.0 },
         }),
         signal: controller.signal,
       }
@@ -34,14 +39,20 @@ export async function transcribeGemini(audioBase64: string, contentType: string)
 
     if (!res.ok) {
       const errText = await res.text();
-      log(`Gemini transcribe error: ${res.status} - ${errText.slice(0, 200)}`, "gemini");
+      log(`Gemini transcribe error: ${res.status} - ${errText.slice(0, 300)}`, "gemini");
       throw new Error(`Gemini transcribe ${res.status}`);
     }
 
     const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    log(`Gemini transcription: ${text.slice(0, 80)}`, "gemini");
-    return text.trim();
+    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    log(`Gemini transcription raw: "${text.slice(0, 120)}"`, "gemini");
+
+    text = text.trim();
+    if (text === "[NO_SPEECH]" || text.toLowerCase().includes("no speech")) {
+      return "";
+    }
+    text = text.replace(/^["']|["']$/g, "").trim();
+    return text;
   } catch (err: any) {
     clearTimeout(timeout);
     if (err.name === "AbortError") {
