@@ -103,59 +103,77 @@ export default function EchoPathPage() {
     ]);
   }, []);
 
-  const ttsUnlockedRef = useRef(false);
-  const ttsQueueRef = useRef<string[]>([]);
+  const ttsVoicesReady = useRef(false);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsPendingRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) ttsVoicesReady.current = true;
+    };
+    loadVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
+  }, []);
 
   const speak = useCallback((text: string) => {
     if (muted || !text) return;
-    if (!("speechSynthesis" in window)) return;
 
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.95;
-    utterance.pitch = 1;
-    utterance.volume = 1.0;
-
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v => v.lang.startsWith("en") && v.localService) || voices.find(v => v.lang.startsWith("en"));
-    if (preferred) utterance.voice = preferred;
-
-    utterance.onerror = (e) => {
-      if (e.error !== "canceled") {
-        console.warn("TTS error:", e.error);
-      }
-    };
-
-    window.speechSynthesis.speak(utterance);
-
-    if (!ttsUnlockedRef.current) {
-      ttsQueueRef.current.push(text);
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
     }
+
+    fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("TTS API failed");
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.volume = 1.0;
+        ttsAudioRef.current = audio;
+        audio.onended = () => URL.revokeObjectURL(url);
+        audio.play().catch(() => {
+          ttsPendingRef.current = text;
+          console.warn("Audio autoplay blocked, will retry on next interaction");
+        });
+      })
+      .catch(() => {
+        if (!("speechSynthesis" in window)) return;
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 0.95;
+        utterance.volume = 1.0;
+        if (ttsVoicesReady.current) {
+          const voices = window.speechSynthesis.getVoices();
+          const preferred = voices.find(v => v.lang.startsWith("en") && v.localService) || voices.find(v => v.lang.startsWith("en"));
+          if (preferred) utterance.voice = preferred;
+        }
+        window.speechSynthesis.speak(utterance);
+      });
   }, [muted]);
 
   useEffect(() => {
-    const unlockTTS = () => {
-      if (ttsUnlockedRef.current) return;
-      ttsUnlockedRef.current = true;
-
-      if ("speechSynthesis" in window) {
-        const silent = new SpeechSynthesisUtterance("");
-        silent.volume = 0;
-        window.speechSynthesis.speak(silent);
-
-        if (ttsQueueRef.current.length > 0) {
-          const lastQueued = ttsQueueRef.current[ttsQueueRef.current.length - 1];
-          ttsQueueRef.current = [];
-          setTimeout(() => speak(lastQueued), 100);
-        }
+    const retryPending = () => {
+      if (ttsPendingRef.current) {
+        const text = ttsPendingRef.current;
+        ttsPendingRef.current = null;
+        speak(text);
       }
     };
-    document.addEventListener("click", unlockTTS, { once: true });
-    document.addEventListener("touchstart", unlockTTS, { once: true });
+    document.addEventListener("click", retryPending, { once: true });
+    document.addEventListener("touchstart", retryPending, { once: true });
     return () => {
-      document.removeEventListener("click", unlockTTS);
-      document.removeEventListener("touchstart", unlockTTS);
+      document.removeEventListener("click", retryPending);
+      document.removeEventListener("touchstart", retryPending);
     };
   }, [speak]);
 
