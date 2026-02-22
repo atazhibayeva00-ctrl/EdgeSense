@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { runFunctionGemmaLocal, transcribeCactus } from "./cactus-adapter";
 import { callGeminiCloud, transcribeGemini } from "./gemini-cloud";
-import { routeDecision, shouldSpeak, isLocalResultValid } from "./router";
+import { routeDecision, shouldSpeak, isLocalResultValid, sceneHash, isSceneChanged } from "./router";
 import { log } from "./index";
 import type { UpdateMessage, SessionState } from "@shared/schema";
 
@@ -13,9 +13,20 @@ async function processFrame(params: {
   imageDataUrl: string;
   mode: string;
   ts: number;
-}): Promise<UpdateMessage> {
+}): Promise<UpdateMessage | null> {
   const startMs = Date.now();
   const session = storage.getSession(params.userId);
+
+  const currentSceneHash = sceneHash(params.imageDataUrl);
+  const sceneChanged = isSceneChanged(session, currentSceneHash);
+  session.lastSceneHash = currentSceneHash;
+
+  if (!sceneChanged && session.stats.frameCount > 0 && params.mode !== "hazard") {
+    session.stats.frameCount++;
+    storage.updateSession(params.userId, session);
+    log(`Scene unchanged (hash=${currentSceneHash}), skipping analysis`, "router");
+    return null;
+  }
 
   let localResult: Awaited<ReturnType<typeof runFunctionGemmaLocal>>;
   try {
@@ -26,6 +37,7 @@ async function processFrame(params: {
     });
   } catch (err: any) {
     log(`Local inference failed: ${err.message}, escalating to cloud`, "cactus");
+    session.consecutiveLocalSuccess = 0;
     localResult = {
       confidence: 0,
       hazards: [],
@@ -45,6 +57,7 @@ async function processFrame(params: {
     localConfidence: localResult.confidence,
     isQuestion: false,
     localResultValid: resultValid,
+    sceneChanged,
   });
 
   let finalSay = localResult.short;
@@ -57,8 +70,14 @@ async function processFrame(params: {
         imageDataUrl: params.imageDataUrl,
       });
       finalSay = cloudResponse;
-      session.lastCloudCallTs = Date.now();
+      const now = Date.now();
+      session.lastCloudCallTs = now;
       session.stats.cloudCount++;
+      session.consecutiveLocalSuccess = 0;
+      session.recentCloudCalls = [
+        ...session.recentCloudCalls.filter(ts => now - ts < 60000),
+        now,
+      ];
       if (localResult.cloud_handoff) {
         decision.routed = "cloud";
         decision.reason = "local_handoff_to_cloud";
@@ -71,7 +90,12 @@ async function processFrame(params: {
     }
   } else {
     session.stats.localCount++;
+    if (resultValid) {
+      session.consecutiveLocalSuccess++;
+    }
   }
+
+  log(`Route: ${decision.routed} (${decision.reason}), conf=${localResult.confidence.toFixed(2)}, streak=${session.consecutiveLocalSuccess}, scene=${sceneChanged ? "new" : "same"}`, "router");
 
   const speak = shouldSpeak({
     session,
@@ -208,6 +232,9 @@ export async function registerRoutes(
         ts: ts || Date.now(),
       });
 
+      if (!result) {
+        return res.json({ type: "update", ts: Date.now(), routed: "local", reason: "scene_unchanged", confidence: 1, hazards: [], say: "", speak: false });
+      }
       res.json(result);
     } catch (err: any) {
       log(`POST /api/frame error: ${err.message}`, "error");
@@ -459,7 +486,7 @@ export async function registerRoutes(
               mode: msg.mode || "hazard",
               ts: msg.ts || Date.now(),
             });
-            if (ws.readyState === WebSocket.OPEN) {
+            if (result && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify(result));
             }
             break;

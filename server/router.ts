@@ -1,9 +1,5 @@
 import type { RoutingDecision, SessionState } from "@shared/schema";
 
-/**
- * Validate that a local inference result is well-formed and not hallucinated.
- * Mirrors the hackathon's _is_well_formed + majority-overlap checks.
- */
 export function isLocalResultValid(result: {
   confidence: number;
   hazards: Array<{ label: string; severity: string }>;
@@ -20,56 +16,73 @@ export function isLocalResultValid(result: {
   return true;
 }
 
-/**
- * Multi-signal hybrid routing engine (adapted from hackathon generate_hybrid).
- *
- * Signals used:
- *   1. Session state (offline, cloud-disabled) — hard overrides
- *   2. Mode (hazard → always local for safety)
- *   3. Local confidence score
- *   4. Local result validity (well-formed, not hallucinated)
- *   5. Rate limiting to avoid cloud spam
- *   6. Cloud handoff flag from Cactus
- */
+export function sceneHash(imageDataUrl: string): string {
+  let hash = 0;
+  const sample = imageDataUrl.slice(-2000);
+  for (let i = 0; i < sample.length; i++) {
+    hash = ((hash << 5) - hash) + sample.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash.toString(36);
+}
+
+export function isSceneChanged(session: SessionState, currentHash: string): boolean {
+  if (!session.lastSceneHash) return true;
+  return session.lastSceneHash !== currentHash;
+}
+
+function getAdaptiveCloudCooldown(session: SessionState): number {
+  const now = Date.now();
+  const recentCalls = session.recentCloudCalls.filter(ts => now - ts < 60000);
+  if (recentCalls.length >= 8) return 15000;
+  if (recentCalls.length >= 5) return 10000;
+  if (recentCalls.length >= 3) return 7000;
+  return 5000;
+}
+
 export function routeDecision(params: {
   session: SessionState;
   mode: string;
   localConfidence: number;
   isQuestion: boolean;
   localResultValid?: boolean;
+  sceneChanged?: boolean;
 }): RoutingDecision {
-  const { session, mode, localConfidence, isQuestion, localResultValid } = params;
+  const { session, mode, localConfidence, isQuestion, localResultValid, sceneChanged } = params;
   const now = Date.now();
 
-  // Rule 1: Hazard mode → always local (safety-critical, no latency)
   if (mode === "hazard" && !isQuestion) {
     return { routed: "local", reason: "hazard_low_latency" };
   }
 
-  // Rule 2: Offline → local only
   if (session.offlineSimulated) {
     return { routed: "local", reason: "offline_mode" };
   }
 
-  // Rule 3: Cloud disabled → local only
   if (!session.cloudEnabled) {
     return { routed: "local", reason: "cloud_disabled" };
   }
 
-  // Rule 4: Invalid local result → escalate to cloud
   if (localResultValid === false) {
     return { routed: "cloud", reason: "local_result_invalid" };
   }
 
-  // Rule 5: High confidence + valid result → local
   if (!isQuestion && localConfidence >= 0.75) {
     return { routed: "local", reason: "high_confidence" };
   }
 
-  // Rule 6: Rate limit cloud calls
+  if (!isQuestion && localConfidence >= 0.5 && sceneChanged === false) {
+    return { routed: "local", reason: "medium_confidence_stable_scene" };
+  }
+
+  if (!isQuestion && localConfidence >= 0.5 && session.consecutiveLocalSuccess >= 3) {
+    return { routed: "local", reason: "medium_confidence_local_streak" };
+  }
+
+  const cloudCooldown = getAdaptiveCloudCooldown(session);
   const timeSinceLastCloud = now - session.lastCloudCallTs;
-  if (timeSinceLastCloud < 5000) {
-    return { routed: "local", reason: "rate_limited" };
+  if (timeSinceLastCloud < cloudCooldown) {
+    return { routed: "local", reason: `rate_limited_${Math.round(cloudCooldown / 1000)}s` };
   }
 
   return { routed: "cloud", reason: isQuestion ? "user_question" : "low_confidence_escalate" };
@@ -117,7 +130,7 @@ export function shouldSpeak(params: {
   return false;
 }
 
-function simpleHash(str: string): string {
+export function simpleHash(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);

@@ -88,6 +88,9 @@ export interface SessionState {
   lastHazardLabels: string[];
   lastHazardTs: number;
   lastSceneSummary: string;
+  lastSceneHash: string;
+  consecutiveLocalSuccess: number;
+  recentCloudCalls: number[];
   stats: {
     localCount: number;
     cloudCount: number;

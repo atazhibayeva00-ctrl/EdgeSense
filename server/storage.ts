@@ -26,6 +26,9 @@ export class MemStorage implements IStorage {
         lastHazardLabels: [],
         lastHazardTs: 0,
         lastSceneSummary: "",
+        lastSceneHash: "",
+        consecutiveLocalSuccess: 0,
+        recentCloudCalls: [],
         stats: { localCount: 0, cloudCount: 0, totalLatencyMs: 0, frameCount: 0 },
       };
       this.sessions.set(userId, session);
