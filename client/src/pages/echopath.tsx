@@ -103,17 +103,61 @@ export default function EchoPathPage() {
     ]);
   }, []);
 
+  const ttsUnlockedRef = useRef(false);
+  const ttsQueueRef = useRef<string[]>([]);
+
   const speak = useCallback((text: string) => {
     if (muted || !text) return;
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9;
-      utterance.pitch = 1;
-      utterance.volume = 0.8;
-      window.speechSynthesis.speak(utterance);
+    if (!("speechSynthesis" in window)) return;
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    utterance.volume = 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v => v.lang.startsWith("en") && v.localService) || voices.find(v => v.lang.startsWith("en"));
+    if (preferred) utterance.voice = preferred;
+
+    utterance.onerror = (e) => {
+      if (e.error !== "canceled") {
+        console.warn("TTS error:", e.error);
+      }
+    };
+
+    window.speechSynthesis.speak(utterance);
+
+    if (!ttsUnlockedRef.current) {
+      ttsQueueRef.current.push(text);
     }
   }, [muted]);
+
+  useEffect(() => {
+    const unlockTTS = () => {
+      if (ttsUnlockedRef.current) return;
+      ttsUnlockedRef.current = true;
+
+      if ("speechSynthesis" in window) {
+        const silent = new SpeechSynthesisUtterance("");
+        silent.volume = 0;
+        window.speechSynthesis.speak(silent);
+
+        if (ttsQueueRef.current.length > 0) {
+          const lastQueued = ttsQueueRef.current[ttsQueueRef.current.length - 1];
+          ttsQueueRef.current = [];
+          setTimeout(() => speak(lastQueued), 100);
+        }
+      }
+    };
+    document.addEventListener("click", unlockTTS, { once: true });
+    document.addEventListener("touchstart", unlockTTS, { once: true });
+    return () => {
+      document.removeEventListener("click", unlockTTS);
+      document.removeEventListener("touchstart", unlockTTS);
+    };
+  }, [speak]);
 
   const handleUpdate = useCallback((update: UpdateMessage) => {
     setLastUpdate(update);
