@@ -36,8 +36,9 @@ Rules:
             { role: "user", parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }
           ],
           generationConfig: {
-            maxOutputTokens: 200,
+            maxOutputTokens: 1024,
             temperature: 0.3,
+            thinkingConfig: { thinkingBudget: 0 },
           },
         }),
         signal: controller.signal,
