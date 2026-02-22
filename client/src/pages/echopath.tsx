@@ -57,7 +57,7 @@ let entryIdCounter = 0;
 export default function EchoPathPage() {
   const [cameraActive, setCameraActive] = useState(false);
   const [streaming, setStreaming] = useState(false);
-  const [fps, setFps] = useState(1);
+  const [fps, setFps] = useState(0.5);
   const [cloudEnabled, setCloudEnabled] = useState(true);
   const [offlineSimulated, setOfflineSimulated] = useState(false);
   const [testHazard, setTestHazard] = useState(false);
@@ -83,6 +83,8 @@ export default function EchoPathPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const isAnalyzingRef = useRef(false);
+  const lastSayRef = useRef("");
   const streamIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userIdRef = useRef(`user_${Math.random().toString(36).slice(2, 8)}`);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -119,6 +121,7 @@ export default function EchoPathPage() {
   const handleUpdate = useCallback((update: UpdateMessage) => {
     setLastUpdate(update);
     setIsAnalyzing(false);
+    isAnalyzingRef.current = false;
     if (update.latencyMs) setLatencyMs(update.latencyMs);
 
     const total = (update.debug?.match(/edge=(\d+)/)?.[1] || "0");
@@ -130,7 +133,8 @@ export default function EchoPathPage() {
     const t = l + c;
     setEdgeRatio(t > 0 ? Math.round((l / t) * 100) : 100);
 
-    if (update.say) {
+    if (update.say && update.say !== lastSayRef.current) {
+      lastSayRef.current = update.say;
       const hasHazards = update.hazards && update.hazards.length > 0;
       addConversationEntry({
         type: hasHazards ? "hazard" : "assistant",
@@ -207,10 +211,9 @@ export default function EchoPathPage() {
     const canvas = canvasRef.current;
     if (!video || !canvas || video.videoWidth === 0) return null;
 
-    const maxWidth = 512;
-    const scale = Math.min(1, maxWidth / video.videoWidth);
-    canvas.width = video.videoWidth * scale;
-    canvas.height = video.videoHeight * scale;
+    const targetSize = 224;
+    canvas.width = targetSize;
+    canvas.height = targetSize;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
@@ -219,6 +222,8 @@ export default function EchoPathPage() {
   }, []);
 
   const sendFrame = useCallback(async (imageDataUrl: string) => {
+    if (isAnalyzingRef.current) return;
+    isAnalyzingRef.current = true;
     setIsAnalyzing(true);
     const msg = {
       type: "frame" as const,
@@ -249,6 +254,7 @@ export default function EchoPathPage() {
         }
       } catch {
         setIsAnalyzing(false);
+        isAnalyzingRef.current = false;
       }
     }
   }, [mode, cloudEnabled, offlineSimulated, testHazard, handleUpdate]);
@@ -569,9 +575,9 @@ export default function EchoPathPage() {
                         <span className="text-[11px] text-white/80 font-medium">{fps} FPS</span>
                         <Slider
                           className="w-14"
-                          min={0.5}
-                          max={2}
-                          step={0.5}
+                          min={0.2}
+                          max={1}
+                          step={0.2}
                           value={[fps]}
                           onValueChange={([v]) => setFps(v)}
                           aria-label="Frames per second"

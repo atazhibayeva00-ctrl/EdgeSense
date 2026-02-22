@@ -49,8 +49,8 @@ except Exception as e:
     whisper_model = None
 
 
-def _data_url_to_temp_file(data_url: str):
-    """Decode data URL (e.g. data:image/jpeg;base64,...) to a temp file path. Caller must unlink."""
+def _data_url_to_temp_file(data_url: str, target_size: int = 224):
+    """Decode data URL to a temp file path, resizing to target_size square for the VLM."""
     m = re.match(r"data:image/(\w+);base64,(.+)", data_url.strip())
     if not m:
         raise ValueError("Invalid image data URL")
@@ -59,6 +59,16 @@ def _data_url_to_temp_file(data_url: str):
         ext = "jpg"
     b64 = m.group(2)
     raw = base64.b64decode(b64)
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(raw))
+        img = img.resize((target_size, target_size), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        raw = buf.getvalue()
+        ext = "jpg"
+    except ImportError:
+        pass
     f = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
     f.write(raw)
     f.close()
