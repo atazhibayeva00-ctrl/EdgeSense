@@ -23,11 +23,11 @@ Rules:
     : `Analyze this scene for a visually impaired user: ${params.lastSceneSummary}`;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
+  const timeout = setTimeout(() => controller.abort(), 5000);
 
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -36,7 +36,7 @@ Rules:
             { role: "user", parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }
           ],
           generationConfig: {
-            maxOutputTokens: 80,
+            maxOutputTokens: 200,
             temperature: 0.3,
           },
         }),
@@ -59,7 +59,7 @@ Rules:
   } catch (err: any) {
     clearTimeout(timeout);
     if (err.name === "AbortError") {
-      log("Gemini call timed out (2.5s)", "gemini");
+      log("Gemini call timed out (5s)", "gemini");
       return "Cloud analysis timed out. Based on local analysis, proceed with caution -- I might be wrong.";
     }
     log(`Gemini error: ${err.message}`, "gemini");
