@@ -48,7 +48,20 @@ export async function transcribeGemini(audioBase64: string, contentType: string)
     log(`Gemini transcription raw: "${text.slice(0, 120)}"`, "gemini");
 
     text = text.trim();
-    if (text === "[NO_SPEECH]" || text.toLowerCase().includes("no speech")) {
+    const lowerText = text.toLowerCase();
+    if (
+      text === "[NO_SPEECH]" ||
+      lowerText.includes("no speech") ||
+      lowerText.includes("blank_audio") ||
+      lowerText.includes("[blank") ||
+      lowerText.includes("inaudible") ||
+      lowerText.includes("no audio") ||
+      lowerText.includes("cannot detect") ||
+      lowerText.includes("no words") ||
+      lowerText.includes("silence") ||
+      (text.startsWith("[") && text.endsWith("]"))
+    ) {
+      log(`Gemini transcription filtered as no-speech: "${text}"`, "gemini");
       return "";
     }
     text = text.replace(/^["']|["']$/g, "").trim();
