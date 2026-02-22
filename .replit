@@ -38,3 +38,8 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.shared]
+CACTUS_ENDPOINT_URL = "https://hydrarch-madelaine-slatier.ngrok-free.dev"
