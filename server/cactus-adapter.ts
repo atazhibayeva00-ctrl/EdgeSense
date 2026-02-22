@@ -82,12 +82,13 @@ async function runCactusRemote(imageDataUrl: string, mode: string, _testHazard: 
         cloud_handoff: data.cloud_handoff === true,
       };
     } catch {
+      log(`Cactus returned non-JSON response: ${responseText.slice(0, 100)}`, "cactus");
       return {
-        confidence: 0.5,
+        confidence: 0.3,
         hazards: [],
         tags: [],
-        short: responseText.slice(0, 200) || "Scene analyzed.",
-        cloud_handoff: data.cloud_handoff === true,
+        short: "Scene analyzed.",
+        cloud_handoff: true,
       };
     }
   } finally {
